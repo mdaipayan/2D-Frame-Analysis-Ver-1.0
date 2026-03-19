@@ -366,7 +366,7 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
     for i, (x, y) in enumerate(nodes):
         ax.scatter(x, y, s=60, color="#1e293b", zorder=6)
         if node_labels:
-            ax.text(x, y+span*0.025, f"N{i}", color="#1e293b",
+            ax.text(x, y+span*0.025, f"N{i+1}", color="#1e293b",
                     fontsize=8, ha="center", va="bottom",
                     fontfamily="monospace", fontweight="bold", zorder=7)
 
@@ -567,14 +567,14 @@ with st.sidebar:
     st.markdown("### 📐 Geometry")
     st.caption("Node coordinates (x, y) in metres")
     node_df = pd.DataFrame(
-        [{"Node": f"N{i}", "x (m)": x, "y (m)": y} for i,(x,y) in enumerate(P["nodes"])]
+        [{"Node": f"N{i+1}", "x (m)": x, "y (m)": y} for i,(x,y) in enumerate(P["nodes"])]
     )
     node_df = st.data_editor(node_df, num_rows="dynamic", use_container_width=True,
                               key=f"nodes_{chosen}")
 
-    st.caption("Elements (node index pairs, 0-based)")
+    st.caption("Elements (node index pairs, 1-based)")
     elem_df = pd.DataFrame(
-        [{"Elem": f"E{i}", "Node i": ni, "Node j": nj, "Label": lbl}
+        [{"Elem": f"E{i+1}", "Node i": ni+1, "Node j": nj+1, "Label": lbl}
          for i, ((ni, nj), lbl) in enumerate(zip(P["elements"], P["labels"]))]
     )
     elem_df = st.data_editor(elem_df, num_rows="dynamic", use_container_width=True,
@@ -588,22 +588,22 @@ with st.sidebar:
         def_check = P["fixed_dofs"].get(i, [])
         cols_bc = st.columns(3)
         checks = []
-        with cols_bc[0]: checks.append(0 if st.checkbox(f"N{i} u",  value=0 in def_check, key=f"u_{i}_{chosen}") else None)
-        with cols_bc[1]: checks.append(1 if st.checkbox(f"N{i} v",  value=1 in def_check, key=f"v_{i}_{chosen}") else None)
-        with cols_bc[2]: checks.append(2 if st.checkbox(f"N{i} θ",  value=2 in def_check, key=f"t_{i}_{chosen}") else None)
+        with cols_bc[0]: checks.append(0 if st.checkbox(f"N{i+1} u",  value=0 in def_check, key=f"u_{i}_{chosen}") else None)
+        with cols_bc[1]: checks.append(1 if st.checkbox(f"N{i+1} v",  value=1 in def_check, key=f"v_{i}_{chosen}") else None)
+        with cols_bc[2]: checks.append(2 if st.checkbox(f"N{i+1} θ",  value=2 in def_check, key=f"t_{i}_{chosen}") else None)
         fixed = [c for c in checks if c is not None]
         if fixed:
             fixed_dofs_ui[i] = fixed
 
     st.divider()
     st.markdown("### ➡️ Nodal Loads")
-    st.caption("kN (force) or kN·m (moment). Positive = +ve axis direction.")
+    st.caption("kN (force) or kN·m (moment). Node numbers are 1-based. Positive = +ve axis direction.")
     load_rows = []
     for nid, ldmap in P["nodal_loads"].items():
         for ld, val in ldmap.items():
-            load_rows.append({"Node": nid, "DOF (0=u,1=v,2=θ)": ld, "Value (kN or kN·m)": val})
+            load_rows.append({"Node": nid+1, "DOF (0=u,1=v,2=θ)": ld, "Value (kN or kN·m)": val})
     load_df = pd.DataFrame(load_rows if load_rows else
-                           [{"Node": 0, "DOF (0=u,1=v,2=θ)": 1, "Value (kN or kN·m)": 0.0}])
+                           [{"Node": 1, "DOF (0=u,1=v,2=θ)": 1, "Value (kN or kN·m)": 0.0}])
     load_df = st.data_editor(load_df, num_rows="dynamic", use_container_width=True,
                               key=f"loads_{chosen}")
 
@@ -628,12 +628,12 @@ nodes_parsed = [
     if _is_valid_row(r, ["x (m)", "y (m)"])
 ]
 elems_parsed = [
-    (int(r["Node i"]), int(r["Node j"]))
+    (int(r["Node i"]) - 1, int(r["Node j"]) - 1)
     for _, r in elem_df.iterrows()
     if _is_valid_row(r, ["Node i", "Node j"])
 ]
 elem_labels_p = [
-    str(r["Label"]) if _is_valid_row(r, ["Label"]) else f"E{i}"
+    str(r["Label"]) if _is_valid_row(r, ["Label"]) else f"E{i+1}"
     for i, (_, r) in enumerate(elem_df.iterrows())
     if _is_valid_row(r, ["Node i", "Node j"])
 ]
@@ -642,7 +642,7 @@ nodal_loads_parsed = {}
 for _, r in load_df.iterrows():
     if not _is_valid_row(r, ["Node", "DOF (0=u,1=v,2=θ)", "Value (kN or kN·m)"]):
         continue
-    nid = int(r["Node"]); ld = int(r["DOF (0=u,1=v,2=θ)"]); val = float(r["Value (kN or kN·m)"])
+    nid = int(r["Node"]) - 1; ld = int(r["DOF (0=u,1=v,2=θ)"]); val = float(r["Value (kN or kN·m)"])
     if abs(val) > 1e-10:
         nodal_loads_parsed.setdefault(nid, {})[ld] = val
 
@@ -660,8 +660,8 @@ if run_btn:
                if ni > max_node or nj > max_node or ni < 0 or nj < 0]
         if bad:
             for i, ni, nj in bad:
-                st.error(f"🚨 Element E{i} references node {max(ni,nj)} but only "
-                         f"{len(nodes_parsed)} nodes exist (0–{max_node}).")
+                st.error(f"🚨 Element E{i+1} references node {max(ni,nj)+1} but only "
+                         f"{len(nodes_parsed)} nodes exist (N1–N{len(nodes_parsed)}).")
             st.stop()
 
         with st.spinner("Assembling stiffness matrices and solving…"):
@@ -695,9 +695,8 @@ if res is None:
     # ── Welcome screen ─────────────────────────────────────────
     col1, col2 = st.columns([1.2, 1])
     with col1:
-        st.markdown("""
-<div class='step-card'>
-<span class='step-title'>📖 What is the Direct Stiffness Method?</span><br><br>
+        with st.expander("📖 What is the Direct Stiffness Method?", expanded=False):
+            st.markdown("""
 The <b>Direct Stiffness Method (DSM)</b> is the fundamental algorithm behind every commercial
 structural analysis software (STAAD, ETABS, SAP2000, OpenSees…).
 <br><br>
@@ -717,7 +716,6 @@ every transformation is shown step by step so you can trace exactly what the com
   <li>Member End Forces — {f'} = [k][T]{u}</li>
   <li>Reactions & Equilibrium Check</li>
 </ol>
-</div>
 """, unsafe_allow_html=True)
 
     with col2:
@@ -822,15 +820,15 @@ if step == 0:
                     unsafe_allow_html=True)
 
         st.markdown("**📍 Nodes**")
-        node_rows = [{"ID": f"N{i}", "x (m)": f"{x:.3f}", "y (m)": f"{y:.3f}"}
+        node_rows = [{"ID": f"N{i+1}", "x (m)": f"{x:.3f}", "y (m)": f"{y:.3f}"}
                      for i,(x,y) in enumerate(nodes_parsed)]
         st.dataframe(pd.DataFrame(node_rows), use_container_width=True, hide_index=True)
 
         st.markdown("**🔗 Elements**")
         elem_rows = []
         for i, (e, lbl) in enumerate(zip(ed, elem_labels_p)):
-            elem_rows.append({"ID":f"E{i}", "Label":lbl, "Node i":f"N{e['ni']}",
-                              "Node j":f"N{e['nj']}", "L (m)":f"{e['L']:.3f}",
+            elem_rows.append({"ID":f"E{i+1}", "Label":lbl, "Node i":f"N{e['ni']+1}",
+                              "Node j":f"N{e['nj']+1}", "L (m)":f"{e['L']:.3f}",
                               "α (°)":f"{e['alpha_deg']:.2f}"})
         st.dataframe(pd.DataFrame(elem_rows), use_container_width=True, hide_index=True)
 
@@ -841,7 +839,7 @@ if step == 0:
 
         st.markdown("**➡️ Nodal Loads**")
         dof_names = {0:"Fx (kN)", 1:"Fy (kN)", 2:"M (kN·m)"}
-        lrows = [{"Node":f"N{nid}", "Load":dof_names[ld], "Value":f"{val:.1f} kN"}
+        lrows = [{"Node":f"N{nid+1}", "Load":dof_names[ld], "Value":f"{val:.1f} kN"}
                  for nid, ldmap in nodal_loads_parsed.items()
                  for ld, val in ldmap.items()]
         st.dataframe(pd.DataFrame(lrows if lrows else [{"Note":"No nodal loads"}]),
@@ -880,7 +878,7 @@ Total DOFs = 3 × nNodes
                 tag = "FREE" if gi in res["free_global"] else "FIXED"
                 f_tags.append(tag)
             dof_rows.append({
-                "Node": f"N{i}",
+                "Node": f"N{i+1}",
                 "u → d": dm[0], "v → d": dm[1], "θ → d": dm[2],
                 "u BC": f_tags[0], "v BC": f_tags[1], "θ BC": f_tags[2],
             })
@@ -925,12 +923,12 @@ EA/L    =  Axial stiffness
 """, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    elem_sel = st.selectbox("Select Element:", [f"E{i} — {lbl}" for i,(lbl) in
+    elem_sel = st.selectbox("Select Element:", [f"E{i+1} — {lbl}" for i,(lbl) in
                                                  enumerate(elem_labels_p)])
-    ei = int(elem_sel.split("E")[1].split(" ")[0])
+    ei = int(elem_sel.split("E")[1].split(" ")[0]) - 1
     e  = ed[ei]
 
-    st.markdown(f"**E{ei} ({elem_labels_p[ei]}) — L = {e['L']:.3f} m, α = {e['alpha_deg']:.2f}°**")
+    st.markdown(f"**E{ei+1} ({elem_labels_p[ei]}) — L = {e['L']:.3f} m, α = {e['alpha_deg']:.2f}°**")
 
     a  = E_val*A_val/e['L']
     b  = 12*E_val*I_val/e['L']**3
@@ -948,9 +946,9 @@ EA/L    =  Axial stiffness
 </div>
 """, unsafe_allow_html=True)
 
-    dof_lbls = [f"u{e['ni']}", f"v{e['ni']}", f"θ{e['ni']}", f"u{e['nj']}", f"v{e['nj']}", f"θ{e['nj']}"]
+    dof_lbls = [f"u{e['ni']+1}", f"v{e['ni']+1}", f"θ{e['ni']+1}", f"u{e['nj']+1}", f"v{e['nj']+1}", f"θ{e['nj']+1}"]
     show_matrix(e["k_loc"], row_labels=dof_lbls, col_labels=dof_lbls,
-                caption=f"[k] for E{ei} (kN/m units; diagonal = stiffness coefficients)")
+                caption=f"[k] for E{ei+1} (kN/m units; diagonal = stiffness coefficients)")
 
 
 # ── Step 3: Transformation Matrix ─────────────────────────────────────────────
@@ -976,15 +974,15 @@ elif step == 3:
 """, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    elem_sel = st.selectbox("Select Element:", [f"E{i} — {lbl}" for i, lbl in
+    elem_sel = st.selectbox("Select Element:", [f"E{i+1} — {lbl}" for i, lbl in
                                                  enumerate(elem_labels_p)])
-    ei = int(elem_sel.split("E")[1].split(" ")[0])
+    ei = int(elem_sel.split("E")[1].split(" ")[0]) - 1
     e  = ed[ei]
-    st.markdown(f"**E{ei}: α = {e['alpha_deg']:.3f}°  →  c = {e['c']:.4f},  s = {e['s']:.4f}**")
+    st.markdown(f"**E{ei+1}: α = {e['alpha_deg']:.3f}°  →  c = {e['c']:.4f},  s = {e['s']:.4f}**")
 
     c1, c2 = st.columns(2)
     with c1:
-        dof_lbls = [f"u{e['ni']}", f"v{e['ni']}", f"θ{e['ni']}", f"u{e['nj']}", f"v{e['nj']}", f"θ{e['nj']}"]
+        dof_lbls = [f"u{e['ni']+1}", f"v{e['ni']+1}", f"θ{e['ni']+1}", f"u{e['nj']+1}", f"v{e['nj']+1}", f"θ{e['nj']+1}"]
         show_matrix(e["T6"], row_labels=dof_lbls, col_labels=dof_lbls,
                     caption="[T] — 6×6 transformation matrix")
     with c2:
@@ -1019,16 +1017,16 @@ elif step == 4:
 """, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    elem_sel = st.selectbox("Select Element:", [f"E{i} — {lbl}" for i, lbl in
+    elem_sel = st.selectbox("Select Element:", [f"E{i+1} — {lbl}" for i, lbl in
                                                  enumerate(elem_labels_p)])
-    ei = int(elem_sel.split("E")[1].split(" ")[0])
+    ei = int(elem_sel.split("E")[1].split(" ")[0]) - 1
     e  = ed[ei]
     dof_lbls = [f"d{g}" for g in e["gdofs"]]
     show_matrix(e["k_glob"], row_labels=dof_lbls, col_labels=dof_lbls,
-                caption=f"[K]ₑ for E{ei} mapped to global DOFs {e['gdofs']}")
+                caption=f"[K]ₑ for E{ei+1} mapped to global DOFs {e['gdofs']}")
 
-    st.markdown(f"**Global DOF mapping for E{ei}:**")
-    dm_rows = [{"Local DOF": f"u{e['ni']}/v{e['ni']}/θ{e['ni']}/u{e['nj']}/v{e['nj']}/θ{e['nj']}".split("/")[li],
+    st.markdown(f"**Global DOF mapping for E{ei+1}:**")
+    dm_rows = [{"Local DOF": f"u{e['ni']+1}/v{e['ni']+1}/θ{e['ni']+1}/u{e['nj']+1}/v{e['nj']+1}/θ{e['nj']+1}".split("/")[li],
                 "Global Index": g}
                for li, g in enumerate(e["gdofs"])]
     st.dataframe(pd.DataFrame(dm_rows), use_container_width=True, hide_index=True)
@@ -1141,7 +1139,7 @@ elif step == 7:
             dof_name = ["u","v","θ"][gi % 3]
             node_id  = gi // 3
             U_tagged.append({
-                "DOF": f"d{gi}", "Node": f"N{node_id}", "Type": dof_name,
+                "DOF": f"d{gi}", "Node": f"N{node_id+1}", "Type": dof_name,
                 "Value": fmt_val(res["U"][gi], 6),
                 "Status": tag,
             })
@@ -1178,7 +1176,7 @@ elif step == 8:
     force_rows = []
     for i, (mr, e) in enumerate(zip(res["member_results"], ed)):
         force_rows.append({
-            "Elem": f"E{i}", "Label": elem_labels_p[i],
+            "Elem": f"E{i+1}", "Label": elem_labels_p[i],
             "N_i (kN)": f"{mr['N_i']:.3f}", "V_i (kN)": f"{mr['V_i']:.3f}",
             "M_i (kN·m)": f"{mr['M_i']:.3f}",
             "N_j (kN)": f"{mr['N_j']:.3f}", "V_j (kN)": f"{mr['V_j']:.3f}",
@@ -1188,9 +1186,9 @@ elif step == 8:
 
     # Local force vectors for selected element
     st.divider()
-    elem_sel = st.selectbox("Detail view — Select Element:", [f"E{i} — {lbl}" for i, lbl in
+    elem_sel = st.selectbox("Detail view — Select Element:", [f"E{i+1} — {lbl}" for i, lbl in
                                                                enumerate(elem_labels_p)])
-    ei = int(elem_sel.split("E")[1].split(" ")[0])
+    ei = int(elem_sel.split("E")[1].split(" ")[0]) - 1
     mr = res["member_results"][ei]
     e  = ed[ei]
 
@@ -1201,7 +1199,7 @@ elif step == 8:
         show_vector(mr["u_global"], labels=gdof_lbls, caption="Global displacements (m / rad)")
     with c2:
         st.markdown("**{u_local} = [T]·{u_global}**")
-        loc_lbls = [f"u'{e['ni']}", f"v'{e['ni']}", f"θ'{e['ni']}", f"u'{e['nj']}", f"v'{e['nj']}", f"θ'{e['nj']}"]
+        loc_lbls = [f"u'{e['ni']+1}", f"v'{e['ni']+1}", f"θ'{e['ni']+1}", f"u'{e['nj']+1}", f"v'{e['nj']+1}", f"θ'{e['nj']+1}"]
         show_vector(mr["u_local"], labels=loc_lbls, caption="Local displacements (m / rad)")
     with c3:
         st.markdown("**{f_local} = [k]·{u_local}**")
@@ -1248,7 +1246,7 @@ elif step == 9:
         dof_names_map = {0:"Rx (kN)", 1:"Ry (kN)", 2:"RM (kN·m)"}
         for gi, val in sorted(res["reactions"].items()):
             nid  = gi // 3; ld = gi % 3
-            rx_rows.append({"Node": f"N{nid}", "DOF": f"d{gi}",
+            rx_rows.append({"Node": f"N{nid+1}", "DOF": f"d{gi}",
                             "Type": dof_names_map[ld], "Reaction": f"{val:.4f}"})
         st.dataframe(pd.DataFrame(rx_rows), use_container_width=True, hide_index=True)
 
