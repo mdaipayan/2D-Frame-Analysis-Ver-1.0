@@ -12,8 +12,6 @@ import math
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from matplotlib.patches import FancyArrowPatch
 import streamlit as st
 
 # ── Page Config ───────────────────────────────────────────────────────────────
@@ -59,7 +57,7 @@ st.markdown("""
 # ══════════════════════════════════════════════════════════════════════════════
 PRESETS = {
     "Portal Frame (Wind + Gravity)": {
-        "desc": "Fixed-base 2-bay portal frame — horizontal wind load + vertical gravity on beam",
+        "desc": "Fixed-base single-bay portal frame — horizontal wind load + vertical gravity on beam",
         "nodes": [(0,0),(0,4),(6,4),(6,0)],
         "elements": [(0,1),(1,2),(2,3)],
         "fixed_dofs": {0:[0,1,2], 3:[0,1,2]},
@@ -68,13 +66,13 @@ PRESETS = {
         "labels": ["Left Col","Beam","Right Col"],
     },
     "Two-Span Continuous Beam": {
-        "desc": "Continuous beam on pin + 2 rollers — central span point load",
-        "nodes": [(0,0),(5,0),(10,0)],
-        "elements": [(0,1),(1,2)],
-        "fixed_dofs": {0:[0,1], 1:[1], 2:[1]},
+        "desc": "Continuous beam on pin + 2 rollers — midspan point load on first span",
+        "nodes": [(0,0),(2.5,0),(5,0),(7.5,0),(10,0)],
+        "elements": [(0,1),(1,2),(2,3),(3,4)],
+        "fixed_dofs": {0:[0,1], 2:[1], 4:[1]},
         "E": 200e6, "A": 0.02, "I": 2e-4,
         "nodal_loads": {1:{1:-100.0}},
-        "labels": ["Span 1","Span 2"],
+        "labels": ["Span 1a","Span 1b","Span 2a","Span 2b"],
     },
     "Cantilever Beam (Tip Load)": {
         "desc": "Fixed-free cantilever — vertical tip load",
@@ -192,7 +190,10 @@ def run_dsm(nodes, elements, fixed_dofs, nodal_loads, E, A, I):
     try:
         Uf = np.linalg.solve(Kff, Ff)
     except np.linalg.LinAlgError:
-        Uf = np.zeros(len(ff))
+        raise ValueError(
+            "Singular stiffness matrix — structure is a mechanism. "
+            "Check boundary conditions (insufficient supports)."
+        )
 
     U = np.zeros(nDOF)
     for i, gi in enumerate(ff):
@@ -208,16 +209,35 @@ def run_dsm(nodes, elements, fixed_dofs, nodal_loads, E, A, I):
             "u_global": u_el,
             "u_local":  u_loc,
             "f_local":  f_loc,
-            "N_i":  -f_loc[0], "V_i": -f_loc[1], "M_i": -f_loc[2],
-            "N_j":   f_loc[3], "V_j":  f_loc[4], "M_j":  f_loc[5],
+            # Force member exerts ON joint = negative of internal force vector
+            "N_i": -f_loc[0], "V_i": -f_loc[1], "M_i": -f_loc[2],
+            "N_j": -f_loc[3], "V_j": -f_loc[4], "M_j": -f_loc[5],
         })
 
     # ── Step 9: Reactions ─────────────────────────────────────
     R_full = K @ U - F
     reactions = {gi: R_full[gi] for gi in fixed_global}
-    eq_check = {"ΣFx": sum(R_full[dof_map[n][0]] for n in fixed_dofs),
-                "ΣFy": sum(R_full[dof_map[n][1]] for n in fixed_dofs),
-                "ΣM":  sum(R_full[dof_map[n][2]] for n in fixed_dofs)}
+
+    # True global moment equilibrium about origin
+    sigma_M = 0.0
+    for nid in fixed_dofs:
+        x, y = nodes[nid]
+        Rx = R_full[dof_map[nid][0]]
+        Ry = R_full[dof_map[nid][1]]
+        RM = R_full[dof_map[nid][2]]
+        sigma_M += RM + Ry * x - Rx * y
+    for nid, ldmap in nodal_loads.items():
+        x, y = nodes[nid]
+        Fx = ldmap.get(0, 0.0); Fy = ldmap.get(1, 0.0); M = ldmap.get(2, 0.0)
+        sigma_M += M + Fy * x - Fx * y
+
+    eq_check = {
+        "ΣFx": sum(R_full[dof_map[n][0]] for n in fixed_dofs) +
+               sum(v for nid, ldm in nodal_loads.items() for ld, v in ldm.items() if ld == 0),
+        "ΣFy": sum(R_full[dof_map[n][1]] for n in fixed_dofs) +
+               sum(v for nid, ldm in nodal_loads.items() for ld, v in ldm.items() if ld == 1),
+        "ΣM":  sigma_M,
+    }
 
     return {
         "nn": nn, "ne": ne, "nDOF": nDOF,
@@ -612,10 +632,24 @@ if run_btn:
     elif not fixed_dofs_ui:
         st.error("🚨 No boundary conditions defined — structure is a mechanism.")
     else:
+        # Validate element node indices
+        max_node = len(nodes_parsed) - 1
+        bad = [(i, ni, nj) for i, (ni, nj) in enumerate(elems_parsed)
+               if ni > max_node or nj > max_node or ni < 0 or nj < 0]
+        if bad:
+            for i, ni, nj in bad:
+                st.error(f"🚨 Element E{i} references node {max(ni,nj)} but only "
+                         f"{len(nodes_parsed)} nodes exist (0–{max_node}).")
+            st.stop()
+
         with st.spinner("Assembling stiffness matrices and solving…"):
-            st.session_state.result = run_dsm(
-                nodes_parsed, elems_parsed, fixed_dofs_ui,
-                nodal_loads_parsed, E_val, A_val, I_val)
+            try:
+                st.session_state.result = run_dsm(
+                    nodes_parsed, elems_parsed, fixed_dofs_ui,
+                    nodal_loads_parsed, E_val, A_val, I_val)
+            except ValueError as err:
+                st.error(f"🚨 {err}")
+                st.stop()
         st.session_state.step = 0
         st.rerun()
 
@@ -723,9 +757,9 @@ STEP_NAMES = [
 tab_cols = st.columns(len(STEP_NAMES))
 for i, (col, name) in enumerate(zip(tab_cols, STEP_NAMES)):
     with col:
-        active = "background:#2563eb;color:#ffffff;" if i == st.session_state.step else ""
+        btn_type = "primary" if i == st.session_state.step else "secondary"
         if st.button(name.split("·")[0].strip(), key=f"tab_{i}",
-                     use_container_width=True, type="secondary"):
+                     use_container_width=True, type=btn_type):
             st.session_state.step = i
 
 st.progress((st.session_state.step) / (len(STEP_NAMES)-1))
@@ -834,7 +868,7 @@ Total DOFs = 3 × nNodes
             if val == "FIXED": return "background-color:#fee2e2;color:#991b1b"
             if val == "FREE":  return "background-color:#dcfce7;color:#166534"
             return ""
-        styled_dofs = df_dofs.style.applymap(color_bc, subset=["u BC","v BC","θ BC"])
+        styled_dofs = df_dofs.style.map(color_bc, subset=["u BC","v BC","θ BC"])
         st.dataframe(styled_dofs, use_container_width=True, hide_index=True)
 
         st.markdown(f"""
@@ -855,9 +889,10 @@ elif step == 2:
 <span class='step-subtitle'>Euler-Bernoulli beam-column element in its own local coordinate system</span>
 <div class='formula-box'>
 Local DOF order: [u_i  v_i  θ_i  |  u_j  v_j  θ_j]
-                  ←axial→ ←shear→ ←moment→
+                  axial shear rot. | axial shear rot.
+                  ←─── Node i ───► | ←─── Node j ───►
 
-EA/L  =  Axial stiffness
+EA/L    =  Axial stiffness
 12EI/L³ =  Transverse (bending) stiffness
 6EI/L²  =  Bending-shear coupling
 4EI/L   =  End moment (same end)
@@ -1080,7 +1115,7 @@ elif step == 7:
         def col_status(val):
             return "background-color:#dcfce7;color:#166534" if val=="SOLVED" else \
                    "background-color:#f1f5f9;color:#475569"
-        st.dataframe(df_U.style.applymap(col_status, subset=["Status"]),
+        st.dataframe(df_U.style.map(col_status, subset=["Status"]),
                      use_container_width=True, hide_index=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1130,7 +1165,7 @@ elif step == 8:
         show_vector(mr["u_global"], labels=gdof_lbls, caption="Global displacements (m / rad)")
     with c2:
         st.markdown("**{u_local} = [T]·{u_global}**")
-        loc_lbls = [f"u'{e['ni']}","v'{e['ni']}","θ'{e['ni']}",f"u'{e['nj']}","v'{e['nj']}","θ'{e['nj']}"]
+        loc_lbls = [f"u'{e['ni']}", f"v'{e['ni']}", f"θ'{e['ni']}", f"u'{e['nj']}", f"v'{e['nj']}", f"θ'{e['nj']}"]
         show_vector(mr["u_local"], labels=loc_lbls, caption="Local displacements (m / rad)")
     with c3:
         st.markdown("**{f_local} = [k]·{u_local}**")
