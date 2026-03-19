@@ -329,7 +329,7 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
                show_deformed=False, show_reactions=False,
                elem_labels=None, node_labels=True):
     """Draw the 2D frame with supports, loads, deformed shape, reactions."""
-    fig, ax = plt.subplots(figsize=(9, 7), facecolor="#f8fafc")
+    fig, ax = plt.subplots(figsize=(11, 8), facecolor="#f8fafc")
     ax.set_facecolor("#ffffff")
     ax.tick_params(colors="#334155")
     for spine in ax.spines.values():
@@ -458,7 +458,7 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
 
 def draw_bmd_sfd(nodes, elements, member_results, elem_labels=None):
     """Draw Bending Moment and Shear Force diagrams."""
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5), facecolor="#f8fafc")
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6), facecolor="#f8fafc")
     titles = ["Bending Moment Diagram (kN·m)", "Shear Force Diagram (kN)"]
     colors = ["#7c3aed", "#0891b2"]
 
@@ -612,14 +612,36 @@ with st.sidebar:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  PARSE UI INPUTS
+#  PARSE UI INPUTS  (skip blank / None rows from data_editor)
 # ══════════════════════════════════════════════════════════════════════════════
-nodes_parsed = [(float(r["x (m)"]), float(r["y (m)"])) for _, r in node_df.iterrows()]
-elems_parsed  = [(int(r["Node i"]), int(r["Node j"]))   for _, r in elem_df.iterrows()]
-elem_labels_p = [str(r["Label"]) for _, r in elem_df.iterrows()]
+def _is_valid_row(r, keys):
+    """Return True only if all required keys have non-None, non-empty values."""
+    for k in keys:
+        v = r.get(k)
+        if v is None or str(v).strip() in ("", "None"):
+            return False
+    return True
+
+nodes_parsed = [
+    (float(r["x (m)"]), float(r["y (m)"]))
+    for _, r in node_df.iterrows()
+    if _is_valid_row(r, ["x (m)", "y (m)"])
+]
+elems_parsed = [
+    (int(r["Node i"]), int(r["Node j"]))
+    for _, r in elem_df.iterrows()
+    if _is_valid_row(r, ["Node i", "Node j"])
+]
+elem_labels_p = [
+    str(r["Label"]) if _is_valid_row(r, ["Label"]) else f"E{i}"
+    for i, (_, r) in enumerate(elem_df.iterrows())
+    if _is_valid_row(r, ["Node i", "Node j"])
+]
 
 nodal_loads_parsed = {}
 for _, r in load_df.iterrows():
+    if not _is_valid_row(r, ["Node", "DOF (0=u,1=v,2=θ)", "Value (kN or kN·m)"]):
+        continue
     nid = int(r["Node"]); ld = int(r["DOF (0=u,1=v,2=θ)"]); val = float(r["Value (kN or kN·m)"])
     if abs(val) > 1e-10:
         nodal_loads_parsed.setdefault(nid, {})[ld] = val
@@ -705,9 +727,8 @@ every transformation is shown step by step so you can trace exactly what the com
         st.pyplot(fig_welcome, use_container_width=True)
         st.caption("← Select a preset and click **🚀 Run DSM Analysis** to begin")
 
-    st.markdown("""
-<div class='step-card'>
-<span class='step-title'>📚 DSM Equation Reference</span>
+    with st.expander("📚 DSM Equation Reference — click to expand", expanded=False):
+        st.markdown("""
 <div class='formula-box'>
 Global stiffness assembly:   [K] = Σ [T]ᵀ [k] [T]   (element by element)
 
@@ -732,7 +753,6 @@ Transformation (2D, angle α from x-axis):
 
 Member end forces (local):   {f'} = [k][T]{u_global}
 Reactions:                   {R}  = [K]{U} − {F}
-</div>
 </div>
 """, unsafe_allow_html=True)
     st.stop()
@@ -789,7 +809,7 @@ nn   = res["nn"]
 
 # ── Step 0: Problem Setup ─────────────────────────────────────────────────────
 if step == 0:
-    col_v, col_t = st.columns([1, 1.2])
+    col_v, col_t = st.columns([1.4, 1])
     with col_v:
         fig0 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
                           elem_labels=elem_labels_p)
@@ -831,7 +851,7 @@ if step == 0:
 
 # ── Step 1: DOF Numbering ─────────────────────────────────────────────────────
 elif step == 1:
-    col_v, col_t = st.columns([1, 1.2])
+    col_v, col_t = st.columns([1.4, 1])
     with col_v:
         fig1 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
                           U=res["U"], dof_map=res["dof_map"], show_dofs=True, show_loads=False)
@@ -841,8 +861,10 @@ elif step == 1:
         st.markdown("<div class='step-card'>", unsafe_allow_html=True)
         st.markdown("<span class='step-title'>Step 1 — DOF Numbering</span>",
                     unsafe_allow_html=True)
-        st.markdown("""
-<span class='step-subtitle'>Each node gets 3 global DOFs: <b>u</b> (horiz), <b>v</b> (vert), <b>θ</b> (rotation)</span>
+        st.markdown("<span class='step-subtitle'>Each node gets 3 global DOFs: <b>u</b> (horiz), <b>v</b> (vert), <b>θ</b> (rotation)</span>",
+                    unsafe_allow_html=True)
+        with st.expander("📐 Theory & Formula", expanded=False):
+            st.markdown("""
 <div class='formula-box'>
 Node i  →  Global DOFs: [ 3i ,  3i+1 ,  3i+2 ]
                               u     v      θ
@@ -885,8 +907,10 @@ elif step == 2:
     st.markdown("<div class='step-card'>", unsafe_allow_html=True)
     st.markdown("<span class='step-title'>Step 2 — Local Stiffness Matrix [k] (6×6)</span>",
                 unsafe_allow_html=True)
-    st.markdown("""
-<span class='step-subtitle'>Euler-Bernoulli beam-column element in its own local coordinate system</span>
+    st.markdown("<span class='step-subtitle'>Euler-Bernoulli beam-column element in its own local coordinate system</span>",
+                unsafe_allow_html=True)
+    with st.expander("📐 Theory & Formula", expanded=False):
+        st.markdown("""
 <div class='formula-box'>
 Local DOF order: [u_i  v_i  θ_i  |  u_j  v_j  θ_j]
                   axial shear rot. | axial shear rot.
@@ -934,8 +958,10 @@ elif step == 3:
     st.markdown("<div class='step-card'>", unsafe_allow_html=True)
     st.markdown("<span class='step-title'>Step 3 — Transformation Matrix [T] (6×6)</span>",
                 unsafe_allow_html=True)
-    st.markdown("""
-<span class='step-subtitle'>Rotates local DOFs to global x-y coordinate system</span>
+    st.markdown("<span class='step-subtitle'>Rotates local DOFs to global x-y coordinate system</span>",
+                unsafe_allow_html=True)
+    with st.expander("📐 Theory & Formula", expanded=False):
+        st.markdown("""
 <div class='formula-box'>
   Direction cosines:   c = cos(α),  s = sin(α)
   α = angle of member axis measured from global +X axis
@@ -980,8 +1006,10 @@ elif step == 4:
     st.markdown("<div class='step-card'>", unsafe_allow_html=True)
     st.markdown("<span class='step-title'>Step 4 — Global Element Stiffness [K]ₑ = [T]ᵀ [k] [T]</span>",
                 unsafe_allow_html=True)
-    st.markdown("""
-<span class='step-subtitle'>Each element's stiffness expressed in global x-y axes, ready for assembly</span>
+    st.markdown("<span class='step-subtitle'>Each element's stiffness expressed in global x-y axes, ready for assembly</span>",
+                unsafe_allow_html=True)
+    with st.expander("📐 Theory & Formula", expanded=False):
+        st.markdown("""
 <div class='formula-box'>
   [K]ₑ = [T]ᵀ · [k] · [T]     (6×6 in global DOF coordinates)
 
@@ -1011,8 +1039,10 @@ elif step == 5:
     st.markdown("<div class='step-card'>", unsafe_allow_html=True)
     st.markdown("<span class='step-title'>Step 5 — Global Assembly [K] and {F}</span>",
                 unsafe_allow_html=True)
-    st.markdown("""
-<span class='step-subtitle'>All element matrices scattered into the global nDOF×nDOF system</span>
+    st.markdown("<span class='step-subtitle'>All element matrices scattered into the global nDOF×nDOF system</span>",
+                unsafe_allow_html=True)
+    with st.expander("📐 Theory & Formula", expanded=False):
+        st.markdown("""
 <div class='formula-box'>
   [K] = Σ (element by element scatter-add of [K]ₑ)
   {F} = applied nodal loads vector (size nDOF)
@@ -1042,8 +1072,10 @@ elif step == 6:
     st.markdown("<div class='step-card'>", unsafe_allow_html=True)
     st.markdown("<span class='step-title'>Step 6 — Partition & Apply Boundary Conditions</span>",
                 unsafe_allow_html=True)
-    st.markdown("""
-<span class='step-subtitle'>Delete fixed DOF rows/columns → reduced system [Kff]{Uf} = {Ff}</span>
+    st.markdown("<span class='step-subtitle'>Delete fixed DOF rows/columns → reduced system [Kff]{Uf} = {Ff}</span>",
+                unsafe_allow_html=True)
+    with st.expander("📐 Theory & Formula", expanded=False):
+        st.markdown("""
 <div class='formula-box'>
   Partition: DOFs split into FREE (f) and CONSTRAINED (c)
 
@@ -1078,7 +1110,7 @@ elif step == 6:
 
 # ── Step 7: Solve ─────────────────────────────────────────────────────────────
 elif step == 7:
-    col_v, col_t = st.columns([1, 1.3])
+    col_v, col_t = st.columns([1.4, 1])
     with col_v:
         fig7 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
                           U=res["U"], dof_map=res["dof_map"],
@@ -1090,8 +1122,10 @@ elif step == 7:
         st.markdown("<div class='step-card'>", unsafe_allow_html=True)
         st.markdown("<span class='step-title'>Step 7 — Solve {Uf} = [Kff]⁻¹ {Ff}</span>",
                     unsafe_allow_html=True)
-        st.markdown("""
-<span class='step-subtitle'>Gaussian elimination with partial pivoting → nodal displacements</span>
+        st.markdown("<span class='step-subtitle'>Gaussian elimination with partial pivoting → nodal displacements</span>",
+                    unsafe_allow_html=True)
+        with st.expander("📐 Theory & Formula", expanded=False):
+            st.markdown("""
 <div class='formula-box'>
   [Kff] · {Uf} = {Ff}
   Solved by numpy.linalg.solve (LU factorization)
@@ -1125,8 +1159,10 @@ elif step == 8:
     st.markdown("<div class='step-card'>", unsafe_allow_html=True)
     st.markdown("<span class='step-title'>Step 8 — Member End Forces {f'} = [k][T]{u_global}</span>",
                 unsafe_allow_html=True)
-    st.markdown("""
-<span class='step-subtitle'>Recover axial force N, shear V, moment M at each member end in LOCAL axes</span>
+    st.markdown("<span class='step-subtitle'>Recover axial force N, shear V, moment M at each member end in LOCAL axes</span>",
+                unsafe_allow_html=True)
+    with st.expander("📐 Theory & Formula", expanded=False):
+        st.markdown("""
 <div class='formula-box'>
   {u_local} = [T] · {u_global_element}     ← transform displacements to local
   {f_local} = [k] · {u_local}              ← apply local stiffness
@@ -1178,7 +1214,7 @@ elif step == 8:
 
 # ── Step 9: Reactions ─────────────────────────────────────────────────────────
 elif step == 9:
-    col_v, col_t = st.columns([1, 1.3])
+    col_v, col_t = st.columns([1.4, 1])
     with col_v:
         fig9 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
                           U=res["U"], dof_map=res["dof_map"],
@@ -1190,8 +1226,10 @@ elif step == 9:
         st.markdown("<div class='step-card'>", unsafe_allow_html=True)
         st.markdown("<span class='step-title'>Step 9 — Support Reactions & Equilibrium</span>",
                     unsafe_allow_html=True)
-        st.markdown("""
-<span class='step-subtitle'>{R} = [K]{U} − {F}  at fixed DOFs</span>
+        st.markdown("<span class='step-subtitle'>{R} = [K]{U} − {F}  at fixed DOFs</span>",
+                    unsafe_allow_html=True)
+        with st.expander("📐 Theory & Formula", expanded=False):
+            st.markdown("""
 <div class='formula-box'>
   Reactions are the forces the supports must exert to
   maintain equilibrium. They are recovered as:
