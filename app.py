@@ -1,0 +1,1241 @@
+"""
+╔══════════════════════════════════════════════════════════════════╗
+║   2D Frame Analyzer — Direct Stiffness Method (DSM)             ║
+║   Glass-Box Educational Tool for B.Tech / M.Tech Students       ║
+║   Author  : Educational Structural Engineering Lab              ║
+║   Deploy  : streamlit run dsm_2d_frame.py                       ║
+║   Requires: streamlit, numpy, pandas, matplotlib                ║
+╚══════════════════════════════════════════════════════════════════╝
+"""
+
+import math
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.patches import FancyArrowPatch
+import streamlit as st
+
+# ── Page Config ───────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="2D Frame Analyzer – DSM",
+    page_icon="🏗️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ── Custom CSS ────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+  /* Dark engineering theme */
+  .main { background:#0d1117; }
+  .stApp { background:#0d1117; }
+  section[data-testid="stSidebar"] { background:#0d1a2e; }
+  h1,h2,h3,h4,h5,h6 { color:#f0b429 !important; font-family: 'Courier New', monospace; }
+  .stDataFrame { font-family: 'Courier New', monospace; font-size:12px; }
+  .step-card {
+    background:#0d2137; border:1px solid #f0b429;
+    border-radius:8px; padding:18px; margin-bottom:16px;
+  }
+  .formula-box {
+    background:#111c2d; border-left:4px solid #f0b429;
+    padding:12px 16px; border-radius:4px;
+    font-family:'Courier New',monospace; font-size:13px; color:#e0e0e0;
+    white-space:pre-wrap; margin:10px 0;
+  }
+  .badge-safe   { background:#1a4731; color:#4ade80; padding:3px 10px; border-radius:12px; font-size:12px; }
+  .badge-warn   { background:#4a2e00; color:#f0b429; padding:3px 10px; border-radius:12px; font-size:12px; }
+  .badge-fail   { background:#4a1010; color:#f87171; padding:3px 10px; border-radius:12px; font-size:12px; }
+  .step-title { font-size:18px; font-weight:700; color:#f0b429; font-family:'Courier New',monospace; }
+  .step-subtitle { font-size:13px; color:#94a3b8; margin-bottom:8px; }
+  .ref-tag { font-size:11px; color:#64748b; font-style:italic; }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PRESET PROBLEMS
+# ══════════════════════════════════════════════════════════════════════════════
+PRESETS = {
+    "Portal Frame (Wind + Gravity)": {
+        "desc": "Fixed-base 2-bay portal frame — horizontal wind load + vertical gravity on beam",
+        "nodes": [(0,0),(0,4),(6,4),(6,0)],
+        "elements": [(0,1),(1,2),(2,3)],
+        "fixed_dofs": {0:[0,1,2], 3:[0,1,2]},
+        "E": 200e6, "A": 0.01, "I": 1e-4,
+        "nodal_loads": {1:{0:20.0}, 2:{1:-30.0}},
+        "labels": ["Left Col","Beam","Right Col"],
+    },
+    "Two-Span Continuous Beam": {
+        "desc": "Continuous beam on pin + 2 rollers — central span point load",
+        "nodes": [(0,0),(5,0),(10,0)],
+        "elements": [(0,1),(1,2)],
+        "fixed_dofs": {0:[0,1], 1:[1], 2:[1]},
+        "E": 200e6, "A": 0.02, "I": 2e-4,
+        "nodal_loads": {1:{1:-100.0}},
+        "labels": ["Span 1","Span 2"],
+    },
+    "Cantilever Beam (Tip Load)": {
+        "desc": "Fixed-free cantilever — vertical tip load",
+        "nodes": [(0,0),(4,0)],
+        "elements": [(0,1)],
+        "fixed_dofs": {0:[0,1,2]},
+        "E": 200e6, "A": 0.01, "I": 1e-4,
+        "nodal_loads": {1:{1:-80.0}},
+        "labels": ["Cantilever"],
+    },
+    "Pitched Roof Frame": {
+        "desc": "Symmetric gabled frame — vertical snow load on both rafters",
+        "nodes": [(0,0),(0,4),(4,6),(8,4),(8,0)],
+        "elements": [(0,1),(1,2),(2,3),(3,4)],
+        "fixed_dofs": {0:[0,1,2], 4:[0,1,2]},
+        "E": 200e6, "A": 0.015, "I": 1.5e-4,
+        "nodal_loads": {1:{1:-20.0}, 2:{1:-40.0}, 3:{1:-20.0}},
+        "labels": ["Left Col","Left Rafter","Right Rafter","Right Col"],
+    },
+}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DSM SOLVER — returns full step-by-step data
+# ══════════════════════════════════════════════════════════════════════════════
+def run_dsm(nodes, elements, fixed_dofs, nodal_loads, E, A, I):
+    """
+    Parameters
+    ----------
+    nodes        : list of (x, y) tuples
+    elements     : list of (ni, nj) node-index pairs
+    fixed_dofs   : dict {node_id: [local_dof_indices]}  — 0=u,1=v,2=θ
+    nodal_loads  : dict {node_id: {local_dof: value}}  — kN or kN·m
+    E, A, I      : material / section (kN/m² , m², m⁴)
+
+    Returns a dict with all intermediate matrices for each step.
+    """
+    nn = len(nodes)
+    ne = len(elements)
+    nDOF = nn * 3  # 3 DOFs per node: [u, v, θ]
+
+    # ── Step 1: DOF numbering ────────────────────────────────
+    dof_map = {i: [3*i, 3*i+1, 3*i+2] for i in range(nn)}
+    fixed_global = []
+    for nid, ldofs in fixed_dofs.items():
+        for ld in ldofs:
+            fixed_global.append(dof_map[nid][ld])
+    fixed_global = sorted(set(fixed_global))
+    free_global  = [d for d in range(nDOF) if d not in fixed_global]
+
+    # ── Step 2 & 3: Local k and Transformation T per element ─
+    elem_data = []
+    for idx, (ni, nj) in enumerate(elements):
+        xi, yi = nodes[ni]
+        xj, yj = nodes[nj]
+        L  = max(math.hypot(xj-xi, yj-yi), 1e-9)
+        al = math.atan2(yj-yi, xj-xi)        # angle w.r.t. x-axis
+        c  = math.cos(al)
+        s  = math.sin(al)
+
+        # 6×6 local stiffness
+        a  = E*A/L
+        b  = 12*E*I/L**3
+        cc = 6*E*I/L**2
+        d  = 4*E*I/L
+        e  = 2*E*I/L
+        k_loc = np.array([
+            [ a,  0,  0, -a,  0,  0],
+            [ 0,  b, cc,  0, -b, cc],
+            [ 0, cc,  d,  0,-cc,  e],
+            [-a,  0,  0,  a,  0,  0],
+            [ 0, -b,-cc,  0,  b,-cc],
+            [ 0, cc,  e,  0,-cc,  d],
+        ])
+
+        # 6×6 transformation matrix (block-diagonal, 2×[c s 0; -s c 0; 0 0 1])
+        lam = np.array([[c, s, 0],[-s, c, 0],[0, 0, 1]])
+        T6  = np.zeros((6,6))
+        T6[:3,:3] = lam
+        T6[3:,3:] = lam
+
+        # Global element stiffness
+        k_glob = T6.T @ k_loc @ T6
+
+        # Global DOF indices for this element
+        gdofs = dof_map[ni] + dof_map[nj]
+
+        elem_data.append({
+            "ni": ni, "nj": nj, "L": L, "alpha_deg": math.degrees(al),
+            "c": c, "s": s,
+            "k_loc": k_loc, "T6": T6, "k_glob": k_glob,
+            "gdofs": gdofs,
+        })
+
+    # ── Step 5: Assemble global K and F ─────────────────────
+    K = np.zeros((nDOF, nDOF))
+    F = np.zeros(nDOF)
+
+    for ed in elem_data:
+        gdofs = ed["gdofs"]
+        for r, gr in enumerate(gdofs):
+            for c2, gc in enumerate(gdofs):
+                K[gr, gc] += ed["k_glob"][r, c2]
+
+    for nid, ldmap in nodal_loads.items():
+        for ld, val in ldmap.items():
+            F[dof_map[nid][ld]] += val
+
+    # ── Step 6: Partition ─────────────────────────────────────
+    ff = free_global
+    Kff = K[np.ix_(ff, ff)]
+    Ff  = F[ff]
+
+    # ── Step 7: Solve ─────────────────────────────────────────
+    try:
+        Uf = np.linalg.solve(Kff, Ff)
+    except np.linalg.LinAlgError:
+        Uf = np.zeros(len(ff))
+
+    U = np.zeros(nDOF)
+    for i, gi in enumerate(ff):
+        U[gi] = Uf[i]
+
+    # ── Step 8: Member end forces (local) ────────────────────
+    member_results = []
+    for ed in elem_data:
+        u_el  = U[ed["gdofs"]]                  # global displacements
+        u_loc = ed["T6"] @ u_el                 # in local coords
+        f_loc = ed["k_loc"] @ u_loc             # local end forces
+        member_results.append({
+            "u_global": u_el,
+            "u_local":  u_loc,
+            "f_local":  f_loc,
+            "N_i":  -f_loc[0], "V_i": -f_loc[1], "M_i": -f_loc[2],
+            "N_j":   f_loc[3], "V_j":  f_loc[4], "M_j":  f_loc[5],
+        })
+
+    # ── Step 9: Reactions ─────────────────────────────────────
+    R_full = K @ U - F
+    reactions = {gi: R_full[gi] for gi in fixed_global}
+    eq_check = {"ΣFx": sum(R_full[dof_map[n][0]] for n in fixed_dofs),
+                "ΣFy": sum(R_full[dof_map[n][1]] for n in fixed_dofs),
+                "ΣM":  sum(R_full[dof_map[n][2]] for n in fixed_dofs)}
+
+    return {
+        "nn": nn, "ne": ne, "nDOF": nDOF,
+        "dof_map": dof_map,
+        "fixed_global": fixed_global,
+        "free_global":  free_global,
+        "elem_data":    elem_data,
+        "K": K, "F": F,
+        "Kff": Kff, "Ff": Ff,
+        "U": U,
+        "member_results": member_results,
+        "reactions": reactions,
+        "eq_check": eq_check,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MATRIX DISPLAY HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+def fmt_val(v, precision=4):
+    if abs(v) < 1e-10:
+        return "0"
+    if abs(v) > 1e5 or (abs(v) < 0.001 and v != 0):
+        return f"{v:.3e}"
+    return f"{v:.{precision}f}"
+
+def show_matrix(M, row_labels=None, col_labels=None, caption="", highlight_rows=None, highlight_cols=None):
+    """Render a numpy matrix as a styled pandas DataFrame."""
+    n, m = M.shape
+    data = {(col_labels[j] if col_labels else f"c{j}"): [fmt_val(M[i,j]) for i in range(n)]
+            for j in range(m)}
+    df = pd.DataFrame(data, index=row_labels if row_labels else [f"r{i}" for i in range(n)])
+
+    def styler(s):
+        styles = pd.DataFrame("", index=s.index, columns=s.columns)
+        if highlight_rows:
+            for r in highlight_rows:
+                if r < len(styles.index):
+                    styles.iloc[r] = "background-color:#1a4731; color:#4ade80"
+        if highlight_cols:
+            for c in highlight_cols:
+                if c < len(styles.columns):
+                    styles.iloc[:, c] = "background-color:#1a2a4a; color:#93c5fd"
+        return styles
+
+    styled = df.style.apply(styler, axis=None)
+    st.dataframe(styled, use_container_width=True, height=min(35*n+38, 500))
+    if caption:
+        st.caption(caption)
+
+def show_vector(v, labels=None, caption="", highlight=None):
+    """Render a vector as a 1-column DataFrame."""
+    n = len(v)
+    idx = labels if labels else [f"d{i}" for i in range(n)]
+    data = {"Value": [fmt_val(x) for x in v]}
+    df = pd.DataFrame(data, index=idx)
+
+    def styler(s):
+        styles = pd.DataFrame("", index=s.index, columns=s.columns)
+        if highlight:
+            for h in highlight:
+                if h < len(styles.index):
+                    styles.iloc[h] = "background-color:#4a2e00; color:#f0b429"
+        return styles
+
+    styled = df.style.apply(styler, axis=None)
+    st.dataframe(styled, use_container_width=True, height=min(35*n+38, 400))
+    if caption:
+        st.caption(caption)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  FRAME VISUALIZATION (Matplotlib)
+# ══════════════════════════════════════════════════════════════════════════════
+SUPPORT_SYMBOLS = {
+    "fixed":  "#f87171",
+    "pin":    "#4ade80",
+    "roller": "#60a5fa",
+}
+
+def classify_support(fixed_ldofs):
+    if len(fixed_ldofs) >= 3: return "fixed"
+    if 0 in fixed_ldofs and 1 in fixed_ldofs: return "pin"
+    return "roller"
+
+def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
+               U=None, dof_map=None, reactions=None,
+               scale=0.3, show_dofs=False, show_loads=True,
+               show_deformed=False, show_reactions=False,
+               elem_labels=None, node_labels=True):
+    """Draw the 2D frame with supports, loads, deformed shape, reactions."""
+    fig, ax = plt.subplots(figsize=(9, 7), facecolor="#0d1117")
+    ax.set_facecolor("#0d1117")
+    ax.tick_params(colors="#64748b")
+    for spine in ax.spines.values():
+        spine.set_edgecolor("#1e293b")
+
+    xs = [n[0] for n in nodes]; ys = [n[1] for n in nodes]
+    span = max(max(xs)-min(xs), max(ys)-min(ys), 1.0)
+    arrowsc = span * 0.08   # arrow scale
+
+    # ── Draw elements ──────────────────────────────────────────
+    colors = ["#60a5fa","#f0b429","#c084fc","#34d399","#f87171"]
+    for idx, (ni, nj) in enumerate(elements):
+        xi, yi = nodes[ni]; xj, yj = nodes[nj]
+        col = colors[idx % len(colors)]
+        ax.plot([xi, xj], [yi, yj], color=col, lw=3, solid_capstyle="round", zorder=3)
+        if elem_labels:
+            mx, my = (xi+xj)/2, (yi+yj)/2
+            ax.text(mx, my, elem_labels[idx], color=col, fontsize=8,
+                    ha="center", va="bottom", fontfamily="monospace",
+                    bbox=dict(boxstyle="round,pad=0.2", fc="#0d1117", ec=col, lw=0.8))
+
+    # ── Draw deformed shape ────────────────────────────────────
+    if show_deformed and U is not None and dof_map is not None:
+        disp_max = max(abs(U)) if max(abs(U)) > 1e-12 else 1
+        sc = scale * span / disp_max
+        for ni, nj in elements:
+            xi, yi = nodes[ni]; xj, yj = nodes[nj]
+            ui = U[dof_map[ni][:2]]; uj = U[dof_map[nj][:2]]
+            ax.plot([xi+sc*ui[0], xj+sc*uj[0]],
+                    [yi+sc*ui[1], yj+sc*uj[1]],
+                    color="#f87171", lw=2, ls="--", zorder=4, alpha=0.85)
+
+    # ── Draw nodes ────────────────────────────────────────────
+    for i, (x, y) in enumerate(nodes):
+        ax.scatter(x, y, s=60, color="white", zorder=6)
+        if node_labels:
+            ax.text(x, y+span*0.025, f"N{i}", color="#e2e8f0",
+                    fontsize=8, ha="center", va="bottom",
+                    fontfamily="monospace", fontweight="bold", zorder=7)
+
+    # ── Draw supports ─────────────────────────────────────────
+    for nid, ldofs in fixed_dofs.items():
+        x, y = nodes[nid]
+        stype = classify_support(ldofs)
+        if stype == "fixed":
+            ax.barh(y, -span*0.04, height=span*0.12, left=x, color="#f87171", alpha=0.4, zorder=2)
+            for dy in np.linspace(-span*0.06, span*0.06, 5):
+                ax.plot([x-span*0.04, x-span*0.06], [y+dy, y+dy+span*0.015],
+                        color="#f87171", lw=1, alpha=0.7)
+        elif stype == "pin":
+            tri = plt.Polygon([[x, y],[x-span*0.03, y-span*0.06],[x+span*0.03, y-span*0.06]],
+                              closed=True, color="#4ade80", alpha=0.5, zorder=2)
+            ax.add_patch(tri)
+            ax.plot([x-span*0.05, x+span*0.05],[y-span*0.065, y-span*0.065],
+                    color="#4ade80", lw=2)
+        else:
+            tri = plt.Polygon([[x, y],[x-span*0.03, y-span*0.05],[x+span*0.03, y-span*0.05]],
+                              closed=True, color="#60a5fa", alpha=0.4, zorder=2)
+            ax.add_patch(tri)
+            circle = plt.Circle((x, y-span*0.07), span*0.022, color="#60a5fa", alpha=0.5, zorder=2)
+            ax.add_patch(circle)
+
+    # ── Draw loads ────────────────────────────────────────────
+    if show_loads:
+        for nid, ldmap in nodal_loads.items():
+            x, y = nodes[nid]
+            for ld, val in ldmap.items():
+                if ld == 0:  # Fx
+                    dx = arrowsc * (1 if val > 0 else -1)
+                    ax.annotate("", xy=(x, y), xytext=(x - dx, y),
+                                arrowprops=dict(arrowstyle="->", color="#fbbf24", lw=2))
+                    ax.text(x - dx/2, y + arrowsc*0.3, f"{val:.0f} kN",
+                            color="#fbbf24", fontsize=8, ha="center", fontfamily="monospace")
+                elif ld == 1:  # Fy
+                    dy = arrowsc * (1 if val > 0 else -1)
+                    ax.annotate("", xy=(x, y), xytext=(x, y - dy),
+                                arrowprops=dict(arrowstyle="->", color="#fbbf24", lw=2))
+                    ax.text(x + arrowsc*0.4, y - dy/2, f"{val:.0f} kN",
+                            color="#fbbf24", fontsize=8, ha="left", fontfamily="monospace")
+
+    # ── Draw DOF arrows (for step 1) ──────────────────────────
+    if show_dofs and dof_map is not None:
+        colors_dof = ["#60a5fa","#4ade80","#c084fc"]
+        labels_dof = ["u","v","θ"]
+        for nid, gdofs in dof_map.items():
+            x, y = nodes[nid]
+            offsets = [(arrowsc*1.1, 0),(0, arrowsc*1.1),(arrowsc*0.6, arrowsc*0.6)]
+            for d, (dx, dy) in enumerate(offsets):
+                col = colors_dof[d]
+                ax.annotate("", xy=(x+dx, y+dy), xytext=(x, y),
+                            arrowprops=dict(arrowstyle="->", color=col, lw=1.2, alpha=0.7))
+                ax.text(x+dx*1.1, y+dy*1.1, f"d{gdofs[d]}\n({labels_dof[d]})",
+                        color=col, fontsize=7, ha="center", fontfamily="monospace")
+
+    # ── Draw reactions ────────────────────────────────────────
+    if show_reactions and reactions is not None and dof_map is not None:
+        for nid, ldofs in fixed_dofs.items():
+            x, y = nodes[nid]
+            for ld in ldofs:
+                gi = dof_map[nid][ld]
+                val = reactions.get(gi, 0)
+                if abs(val) < 1e-4: continue
+                if ld == 0:
+                    dx = arrowsc * (1 if val > 0 else -1)
+                    ax.annotate("", xy=(x+dx, y), xytext=(x, y),
+                                arrowprops=dict(arrowstyle="->", color="#f87171", lw=2))
+                    ax.text(x+dx, y-arrowsc*0.4, f"Rx={val:.1f}",
+                            color="#f87171", fontsize=7, ha="center", fontfamily="monospace")
+                elif ld == 1:
+                    dy = arrowsc * (1 if val > 0 else -1)
+                    ax.annotate("", xy=(x, y+dy), xytext=(x, y),
+                                arrowprops=dict(arrowstyle="->", color="#f87171", lw=2))
+                    ax.text(x-arrowsc*0.6, y+dy, f"Ry={val:.1f}",
+                            color="#f87171", fontsize=7, ha="right", fontfamily="monospace")
+
+    margin = span * 0.2
+    ax.set_xlim(min(xs)-margin, max(xs)+margin)
+    ax.set_ylim(min(ys)-margin, max(ys)+margin)
+    ax.set_aspect("equal")
+    ax.grid(True, color="#1e293b", lw=0.5, alpha=0.5)
+    ax.set_xlabel("X (m)", color="#64748b", fontfamily="monospace")
+    ax.set_ylabel("Y (m)", color="#64748b", fontfamily="monospace")
+    plt.tight_layout()
+    return fig
+
+
+def draw_bmd_sfd(nodes, elements, member_results, elem_labels=None):
+    """Draw Bending Moment and Shear Force diagrams."""
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), facecolor="#0d1117")
+    titles = ["Bending Moment Diagram (kN·m)", "Shear Force Diagram (kN)"]
+    colors = ["#c084fc", "#34d399"]
+
+    for ax_idx, ax in enumerate(axes):
+        ax.set_facecolor("#0d1117")
+        ax.tick_params(colors="#64748b")
+        for spine in ax.spines.values():
+            spine.set_edgecolor("#1e293b")
+        ax.set_title(titles[ax_idx], color="#f0b429", fontfamily="monospace", pad=10)
+        ax.grid(True, color="#1e293b", lw=0.5)
+
+        xs = [n[0] for n in nodes]; ys = [n[1] for n in nodes]
+        span = max(max(xs)-min(xs), max(ys)-min(ys), 1.0)
+
+        # Draw element skeleton
+        for ni, nj in elements:
+            ax.plot([nodes[ni][0], nodes[nj][0]], [nodes[ni][1], nodes[nj][1]],
+                    color="#334155", lw=1, zorder=1)
+
+        for idx, ((ni, nj), mr) in enumerate(zip(elements, member_results)):
+            xi, yi = nodes[ni]; xj, yj = nodes[nj]
+            L = math.hypot(xj-xi, yj-yi)
+            alpha = math.atan2(yj-yi, xj-xi)
+            c, s  = math.cos(alpha), math.sin(alpha)
+            perp  = (-s, c)
+
+            if ax_idx == 0:  # BMD
+                Mi = mr["M_i"]; Mj = mr["M_j"]
+            else:             # SFD
+                Mi = mr["V_i"]; Mj = mr["V_j"]
+
+            scale = span * 0.15 / max(max(abs(Mi), abs(Mj), 1e-9), 1)
+            n_pts = 20
+            pts_x, pts_y = [], []
+            for k in range(n_pts+1):
+                t = k / n_pts
+                val = Mi*(1-t) + Mj*t   # linear interpolation
+                px = xi + t*(xj-xi) + scale*val*perp[0]
+                py = yi + t*(yj-yi) + scale*val*perp[1]
+                pts_x.append(px); pts_y.append(py)
+
+            col = colors[idx % len(colors)]
+            # Baseline
+            ax.plot([xi, xj], [yi, yj], color="#475569", lw=1)
+            # Filled BMD/SFD
+            bx = [xi + t*(xj-xi) for t in [k/n_pts for k in range(n_pts+1)]]
+            by = [yi + t*(yj-yi) for t in [k/n_pts for k in range(n_pts+1)]]
+            ax.fill(bx+pts_x[::-1], by+pts_y[::-1], color=col, alpha=0.25)
+            ax.plot(pts_x, pts_y, color=col, lw=2)
+
+            # Labels at ends
+            ax.text(xi + scale*Mi*perp[0]*1.1, yi + scale*Mi*perp[1]*1.1,
+                    f"{Mi:.1f}", color=col, fontsize=7, ha="center", fontfamily="monospace")
+            ax.text(xj + scale*Mj*perp[0]*1.1, yj + scale*Mj*perp[1]*1.1,
+                    f"{Mj:.1f}", color=col, fontsize=7, ha="center", fontfamily="monospace")
+
+        ax.set_aspect("equal")
+        margin = span * 0.25
+        ax.set_xlim(min(xs)-margin, max(xs)+margin)
+        ax.set_ylim(min(ys)-margin, max(ys)+margin)
+
+    plt.tight_layout()
+    return fig
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SESSION STATE
+# ══════════════════════════════════════════════════════════════════════════════
+if "step" not in st.session_state:
+    st.session_state.step = 0
+if "preset" not in st.session_state:
+    st.session_state.preset = list(PRESETS.keys())[0]
+if "result" not in st.session_state:
+    st.session_state.result = None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SIDEBAR
+# ══════════════════════════════════════════════════════════════════════════════
+with st.sidebar:
+    st.markdown("## 🏗️ 2D DSM Frame Analyzer")
+    st.caption("Glass-Box Educational Tool for B.Tech / M.Tech")
+    st.divider()
+
+    st.markdown("### 📌 Preset Examples")
+    chosen = st.selectbox("Load Preset:", list(PRESETS.keys()),
+                          index=list(PRESETS.keys()).index(st.session_state.preset))
+    if chosen != st.session_state.preset:
+        st.session_state.preset = chosen
+        st.session_state.result = None
+        st.session_state.step   = 0
+
+    P = PRESETS[chosen]
+    st.info(P["desc"])
+
+    st.divider()
+    st.markdown("### ⚙️ Material & Section")
+    E_val = st.number_input("E — Elastic Modulus (kN/m²)", value=float(P["E"]),
+                            format="%.2e", help="Young's modulus")
+    A_val = st.number_input("A — Cross-Section Area (m²)",  value=float(P["A"]),
+                            format="%.4f")
+    I_val = st.number_input("I — Second Moment (m⁴)",       value=float(P["I"]),
+                            format="%.6f")
+
+    st.divider()
+    st.markdown("### 📐 Geometry")
+    st.caption("Node coordinates (x, y) in metres")
+    node_df = pd.DataFrame(
+        [{"Node": f"N{i}", "x (m)": x, "y (m)": y} for i,(x,y) in enumerate(P["nodes"])]
+    )
+    node_df = st.data_editor(node_df, num_rows="dynamic", use_container_width=True,
+                              key=f"nodes_{chosen}")
+
+    st.caption("Elements (node index pairs, 0-based)")
+    elem_df = pd.DataFrame(
+        [{"Elem": f"E{i}", "Node i": ni, "Node j": nj, "Label": lbl}
+         for i, ((ni, nj), lbl) in enumerate(zip(P["elements"], P["labels"]))]
+    )
+    elem_df = st.data_editor(elem_df, num_rows="dynamic", use_container_width=True,
+                              key=f"elems_{chosen}")
+
+    st.divider()
+    st.markdown("### 🔩 Boundary Conditions")
+    st.caption("Check DOFs to fix (u=horiz, v=vert, θ=rotation)")
+    fixed_dofs_ui = {}
+    for i in range(len(node_df)):
+        def_check = P["fixed_dofs"].get(i, [])
+        cols_bc = st.columns(3)
+        checks = []
+        with cols_bc[0]: checks.append(0 if st.checkbox(f"N{i} u",  value=0 in def_check, key=f"u_{i}_{chosen}") else None)
+        with cols_bc[1]: checks.append(1 if st.checkbox(f"N{i} v",  value=1 in def_check, key=f"v_{i}_{chosen}") else None)
+        with cols_bc[2]: checks.append(2 if st.checkbox(f"N{i} θ",  value=2 in def_check, key=f"t_{i}_{chosen}") else None)
+        fixed = [c for c in checks if c is not None]
+        if fixed:
+            fixed_dofs_ui[i] = fixed
+
+    st.divider()
+    st.markdown("### ➡️ Nodal Loads")
+    st.caption("kN (force) or kN·m (moment). Positive = +ve axis direction.")
+    load_rows = []
+    for nid, ldmap in P["nodal_loads"].items():
+        for ld, val in ldmap.items():
+            load_rows.append({"Node": nid, "DOF (0=u,1=v,2=θ)": ld, "Value (kN or kN·m)": val})
+    load_df = pd.DataFrame(load_rows if load_rows else
+                           [{"Node": 0, "DOF (0=u,1=v,2=θ)": 1, "Value (kN or kN·m)": 0.0}])
+    load_df = st.data_editor(load_df, num_rows="dynamic", use_container_width=True,
+                              key=f"loads_{chosen}")
+
+    st.divider()
+    run_btn = st.button("🚀 Run DSM Analysis", type="primary", use_container_width=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PARSE UI INPUTS
+# ══════════════════════════════════════════════════════════════════════════════
+nodes_parsed = [(float(r["x (m)"]), float(r["y (m)"])) for _, r in node_df.iterrows()]
+elems_parsed  = [(int(r["Node i"]), int(r["Node j"]))   for _, r in elem_df.iterrows()]
+elem_labels_p = [str(r["Label"]) for _, r in elem_df.iterrows()]
+
+nodal_loads_parsed = {}
+for _, r in load_df.iterrows():
+    nid = int(r["Node"]); ld = int(r["DOF (0=u,1=v,2=θ)"]); val = float(r["Value (kN or kN·m)"])
+    if abs(val) > 1e-10:
+        nodal_loads_parsed.setdefault(nid, {})[ld] = val
+
+if run_btn:
+    if len(nodes_parsed) < 2:
+        st.error("🚨 Need at least 2 nodes.")
+    elif len(elems_parsed) < 1:
+        st.error("🚨 Need at least 1 element.")
+    elif not fixed_dofs_ui:
+        st.error("🚨 No boundary conditions defined — structure is a mechanism.")
+    else:
+        with st.spinner("Assembling stiffness matrices and solving…"):
+            st.session_state.result = run_dsm(
+                nodes_parsed, elems_parsed, fixed_dofs_ui,
+                nodal_loads_parsed, E_val, A_val, I_val)
+        st.session_state.step = 0
+        st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  HEADER
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("""
+<h1 style='text-align:center; font-family:Courier New; color:#f0b429; letter-spacing:2px;'>
+  🏗️ 2D FRAME ANALYZER — DIRECT STIFFNESS METHOD
+</h1>
+<p style='text-align:center; color:#94a3b8; font-family:Courier New; font-size:14px;'>
+  Glass-Box Educational Tool &nbsp;|&nbsp; B.Tech / M.Tech Structural Analysis
+</p>
+""", unsafe_allow_html=True)
+st.divider()
+
+res = st.session_state.result
+
+if res is None:
+    # ── Welcome screen ─────────────────────────────────────────
+    col1, col2 = st.columns([1.2, 1])
+    with col1:
+        st.markdown("""
+<div class='step-card'>
+<span class='step-title'>📖 What is the Direct Stiffness Method?</span><br><br>
+The <b>Direct Stiffness Method (DSM)</b> is the fundamental algorithm behind every commercial
+structural analysis software (STAAD, ETABS, SAP2000, OpenSees…).
+<br><br>
+This app makes DSM a <b>glass box</b> — every intermediate matrix, every equation,
+every transformation is shown step by step so you can trace exactly what the computer does.
+<br><br>
+<b>DSM in 10 Steps:</b>
+<ol style='font-family:Courier New; font-size:13px; color:#e2e8f0; line-height:1.9;'>
+  <li>Problem Setup — geometry, properties</li>
+  <li>DOF Numbering — 3 DOFs per node</li>
+  <li>Local Stiffness [k] — 6×6 per element</li>
+  <li>Transformation [T] — rotate to global</li>
+  <li>Global Element [K]ₑ = [T]ᵀ[k][T]</li>
+  <li>Assembly — build nDOF × nDOF [K] and {F}</li>
+  <li>Partition & Apply BCs — extract [Kff]</li>
+  <li>Solve — {Uf} = [Kff]⁻¹ {Ff}</li>
+  <li>Member End Forces — {f'} = [k][T]{u}</li>
+  <li>Reactions & Equilibrium Check</li>
+</ol>
+</div>
+""", unsafe_allow_html=True)
+
+    with col2:
+        fig_welcome = draw_frame(
+            nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
+            elem_labels=elem_labels_p, node_labels=True)
+        st.pyplot(fig_welcome, use_container_width=True)
+        st.caption("← Select a preset and click **🚀 Run DSM Analysis** to begin")
+
+    st.markdown("""
+<div class='step-card'>
+<span class='step-title'>📚 DSM Equation Reference</span>
+<div class='formula-box'>
+Global stiffness assembly:   [K] = Σ [T]ᵀ [k] [T]   (element by element)
+
+Partitioned system:          [Kff]{Uf} = {Ff}  −  [Kfc]{Uc}
+
+Local stiffness (Euler-Bernoulli beam-column, 6×6):
+
+       ┌  EA/L    0       0      -EA/L   0       0    ┐
+       │   0    12EI/L³  6EI/L²   0   -12EI/L³  6EI/L² │
+[k] = │   0     6EI/L²  4EI/L    0    -6EI/L²  2EI/L  │
+       │ -EA/L   0       0       EA/L   0       0    │
+       │   0   -12EI/L³ -6EI/L²  0    12EI/L³ -6EI/L² │
+       └   0     6EI/L²  2EI/L   0    -6EI/L²  4EI/L  ┘
+
+Transformation (2D, angle α from x-axis):
+       ┌  c   s   0   0   0   0 ┐        c = cos(α)
+[T] = │ -s   c   0   0   0   0 │        s = sin(α)
+       │  0   0   1   0   0   0 │
+       │  0   0   0   c   s   0 │
+       │  0   0   0  -s   c   0 │
+       └  0   0   0   0   0   1 ┘
+
+Member end forces (local):   {f'} = [k][T]{u_global}
+Reactions:                   {R}  = [K]{U} − {F}
+</div>
+</div>
+""", unsafe_allow_html=True)
+    st.stop()
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  STEP NAVIGATOR
+# ══════════════════════════════════════════════════════════════════════════════
+STEP_NAMES = [
+    "0 · Problem Setup",
+    "1 · DOF Numbering",
+    "2 · Local [k]",
+    "3 · Transform [T]",
+    "4 · Global [K]ₑ",
+    "5 · Assembly [K]",
+    "6 · Partition & BCs",
+    "7 · Solve {U}",
+    "8 · Member Forces",
+    "9 · Reactions",
+]
+
+# Tab bar
+tab_cols = st.columns(len(STEP_NAMES))
+for i, (col, name) in enumerate(zip(tab_cols, STEP_NAMES)):
+    with col:
+        active = "background:#f0b429;color:#0d1117;" if i == st.session_state.step else ""
+        if st.button(name.split("·")[0].strip(), key=f"tab_{i}",
+                     use_container_width=True, type="secondary"):
+            st.session_state.step = i
+
+st.progress((st.session_state.step) / (len(STEP_NAMES)-1))
+
+# Prev / Next
+nav_c1, nav_mid, nav_c2 = st.columns([1, 6, 1])
+with nav_c1:
+    if st.button("◀ Prev", use_container_width=True) and st.session_state.step > 0:
+        st.session_state.step -= 1; st.rerun()
+with nav_mid:
+    st.markdown(f"<h3 style='text-align:center;margin:0;'>{STEP_NAMES[st.session_state.step]}</h3>",
+                unsafe_allow_html=True)
+with nav_c2:
+    if st.button("Next ▶", use_container_width=True) and st.session_state.step < len(STEP_NAMES)-1:
+        st.session_state.step += 1; st.rerun()
+
+st.divider()
+
+step = st.session_state.step
+ed   = res["elem_data"]
+ne   = res["ne"]
+nn   = res["nn"]
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  STEP CONTENT
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Step 0: Problem Setup ─────────────────────────────────────────────────────
+if step == 0:
+    col_v, col_t = st.columns([1, 1.2])
+    with col_v:
+        fig0 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
+                          elem_labels=elem_labels_p)
+        st.pyplot(fig0, use_container_width=True)
+
+    with col_t:
+        st.markdown("<div class='step-card'>", unsafe_allow_html=True)
+        st.markdown("<span class='step-title'>Problem Setup</span>", unsafe_allow_html=True)
+        st.markdown("<span class='step-subtitle'>Define geometry, section, material, loads</span>",
+                    unsafe_allow_html=True)
+
+        st.markdown("**📍 Nodes**")
+        node_rows = [{"ID": f"N{i}", "x (m)": f"{x:.3f}", "y (m)": f"{y:.3f}"}
+                     for i,(x,y) in enumerate(nodes_parsed)]
+        st.dataframe(pd.DataFrame(node_rows), use_container_width=True, hide_index=True)
+
+        st.markdown("**🔗 Elements**")
+        elem_rows = []
+        for i, (e, lbl) in enumerate(zip(ed, elem_labels_p)):
+            elem_rows.append({"ID":f"E{i}", "Label":lbl, "Node i":f"N{e['ni']}",
+                              "Node j":f"N{e['nj']}", "L (m)":f"{e['L']:.3f}",
+                              "α (°)":f"{e['alpha_deg']:.2f}"})
+        st.dataframe(pd.DataFrame(elem_rows), use_container_width=True, hide_index=True)
+
+        st.markdown("**⚙️ Material / Section (same for all elements)**")
+        st.dataframe(pd.DataFrame([{"E (kN/m²)": f"{E_val:.3e}", "A (m²)": f"{A_val:.4f}",
+                                    "I (m⁴)": f"{I_val:.6f}"}]),
+                     use_container_width=True, hide_index=True)
+
+        st.markdown("**➡️ Nodal Loads**")
+        dof_names = {0:"Fx (kN)", 1:"Fy (kN)", 2:"M (kN·m)"}
+        lrows = [{"Node":f"N{nid}", "Load":dof_names[ld], "Value":f"{val:.1f} kN"}
+                 for nid, ldmap in nodal_loads_parsed.items()
+                 for ld, val in ldmap.items()]
+        st.dataframe(pd.DataFrame(lrows if lrows else [{"Note":"No nodal loads"}]),
+                     use_container_width=True, hide_index=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ── Step 1: DOF Numbering ─────────────────────────────────────────────────────
+elif step == 1:
+    col_v, col_t = st.columns([1, 1.2])
+    with col_v:
+        fig1 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
+                          U=res["U"], dof_map=res["dof_map"], show_dofs=True, show_loads=False)
+        st.pyplot(fig1, use_container_width=True)
+
+    with col_t:
+        st.markdown("<div class='step-card'>", unsafe_allow_html=True)
+        st.markdown("<span class='step-title'>Step 1 — DOF Numbering</span>",
+                    unsafe_allow_html=True)
+        st.markdown("""
+<span class='step-subtitle'>Each node gets 3 global DOFs: <b>u</b> (horiz), <b>v</b> (vert), <b>θ</b> (rotation)</span>
+<div class='formula-box'>
+Node i  →  Global DOFs: [ 3i ,  3i+1 ,  3i+2 ]
+                              u     v      θ
+Total DOFs = 3 × nNodes
+</div>
+""", unsafe_allow_html=True)
+
+        dof_rows = []
+        for i in range(nn):
+            dm = res["dof_map"][i]
+            f_tags = []
+            for li, gi in enumerate(dm):
+                tag = "FREE" if gi in res["free_global"] else "FIXED"
+                f_tags.append(tag)
+            dof_rows.append({
+                "Node": f"N{i}",
+                "u → d": dm[0], "v → d": dm[1], "θ → d": dm[2],
+                "u BC": f_tags[0], "v BC": f_tags[1], "θ BC": f_tags[2],
+            })
+        df_dofs = pd.DataFrame(dof_rows)
+
+        def color_bc(val):
+            if val == "FIXED": return "background-color:#4a1010;color:#f87171"
+            if val == "FREE":  return "background-color:#1a4731;color:#4ade80"
+            return ""
+        styled_dofs = df_dofs.style.applymap(color_bc, subset=["u BC","v BC","θ BC"])
+        st.dataframe(styled_dofs, use_container_width=True, hide_index=True)
+
+        st.markdown(f"""
+**Summary:**
+- Total DOFs: **{res['nDOF']}**
+- Fixed DOFs: **{len(res['fixed_global'])}** → {res['fixed_global']}
+- Free DOFs:  **{len(res['free_global'])}**  → {res['free_global']}
+""")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ── Step 2: Local Stiffness ────────────────────────────────────────────────────
+elif step == 2:
+    st.markdown("<div class='step-card'>", unsafe_allow_html=True)
+    st.markdown("<span class='step-title'>Step 2 — Local Stiffness Matrix [k] (6×6)</span>",
+                unsafe_allow_html=True)
+    st.markdown("""
+<span class='step-subtitle'>Euler-Bernoulli beam-column element in its own local coordinate system</span>
+<div class='formula-box'>
+Local DOF order: [u_i  v_i  θ_i  |  u_j  v_j  θ_j]
+                  ←axial→ ←shear→ ←moment→
+
+EA/L  =  Axial stiffness
+12EI/L³ =  Transverse (bending) stiffness
+6EI/L²  =  Bending-shear coupling
+4EI/L   =  End moment (same end)
+2EI/L   =  End moment (far end, carry-over)
+</div>
+""", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    elem_sel = st.selectbox("Select Element:", [f"E{i} — {lbl}" for i,(lbl) in
+                                                 enumerate(elem_labels_p)])
+    ei = int(elem_sel.split("E")[1].split(" ")[0])
+    e  = ed[ei]
+
+    st.markdown(f"**E{ei} ({elem_labels_p[ei]}) — L = {e['L']:.3f} m, α = {e['alpha_deg']:.2f}°**")
+
+    a  = E_val*A_val/e['L']
+    b  = 12*E_val*I_val/e['L']**3
+    c  = 6*E_val*I_val/e['L']**2
+    d  = 4*E_val*I_val/e['L']
+    ev = 2*E_val*I_val/e['L']
+
+    st.markdown(f"""
+<div class='formula-box'>
+  EA/L  = {E_val:.2e} × {A_val:.4f} / {e['L']:.3f}  = {a:.4e} kN/m
+  12EI/L³ = 12×{E_val:.2e}×{I_val:.6f}/{e['L']:.3f}³ = {b:.4e} kN/m
+  6EI/L²  = {c:.4e} kN
+  4EI/L   = {d:.4e} kN·m
+  2EI/L   = {ev:.4e} kN·m
+</div>
+""", unsafe_allow_html=True)
+
+    dof_lbls = [f"u{e['ni']}", f"v{e['ni']}", f"θ{e['ni']}", f"u{e['nj']}", f"v{e['nj']}", f"θ{e['nj']}"]
+    show_matrix(e["k_loc"], row_labels=dof_lbls, col_labels=dof_lbls,
+                caption=f"[k] for E{ei} (kN/m units; diagonal = stiffness coefficients)")
+
+
+# ── Step 3: Transformation Matrix ─────────────────────────────────────────────
+elif step == 3:
+    st.markdown("<div class='step-card'>", unsafe_allow_html=True)
+    st.markdown("<span class='step-title'>Step 3 — Transformation Matrix [T] (6×6)</span>",
+                unsafe_allow_html=True)
+    st.markdown("""
+<span class='step-subtitle'>Rotates local DOFs to global x-y coordinate system</span>
+<div class='formula-box'>
+  Direction cosines:   c = cos(α),  s = sin(α)
+  α = angle of member axis measured from global +X axis
+
+  [λ] = ⌈ c   s   0 ⌉       [T] = block-diagonal:  ⌈ [λ]   [0] ⌉
+        │-s   c   0 │                                ⌊ [0]   [λ] ⌋
+        ⌊ 0   0   1 ⌋
+
+  Local coords = [T] × {u_global}       →   {u_loc} = [T]{u}
+  Global forces from local = [T]ᵀ × {f_local}
+</div>
+""", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    elem_sel = st.selectbox("Select Element:", [f"E{i} — {lbl}" for i, lbl in
+                                                 enumerate(elem_labels_p)])
+    ei = int(elem_sel.split("E")[1].split(" ")[0])
+    e  = ed[ei]
+    st.markdown(f"**E{ei}: α = {e['alpha_deg']:.3f}°  →  c = {e['c']:.4f},  s = {e['s']:.4f}**")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        dof_lbls = [f"u{e['ni']}", f"v{e['ni']}", f"θ{e['ni']}", f"u{e['nj']}", f"v{e['nj']}", f"θ{e['nj']}"]
+        show_matrix(e["T6"], row_labels=dof_lbls, col_labels=dof_lbls,
+                    caption="[T] — 6×6 transformation matrix")
+    with c2:
+        fig3 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, {},
+                          elem_labels=elem_labels_p)
+        # Annotate angle
+        ni, nj = nodes_parsed[e["ni"]], nodes_parsed[e["nj"]]
+        fig3.axes[0].annotate(
+            f"α={e['alpha_deg']:.1f}°",
+            xy=((ni[0]+nj[0])/2, (ni[1]+nj[1])/2),
+            color="#c084fc", fontsize=10, fontfamily="monospace",
+            bbox=dict(boxstyle="round", fc="#0d1117", ec="#c084fc"),
+        )
+        st.pyplot(fig3, use_container_width=True)
+
+
+# ── Step 4: Global Element Stiffness ──────────────────────────────────────────
+elif step == 4:
+    st.markdown("<div class='step-card'>", unsafe_allow_html=True)
+    st.markdown("<span class='step-title'>Step 4 — Global Element Stiffness [K]ₑ = [T]ᵀ [k] [T]</span>",
+                unsafe_allow_html=True)
+    st.markdown("""
+<span class='step-subtitle'>Each element's stiffness expressed in global x-y axes, ready for assembly</span>
+<div class='formula-box'>
+  [K]ₑ = [T]ᵀ · [k] · [T]     (6×6 in global DOF coordinates)
+
+  This is the "scatter" matrix whose entries will be added to the
+  corresponding rows/columns of the global stiffness matrix [K].
+</div>
+""", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    elem_sel = st.selectbox("Select Element:", [f"E{i} — {lbl}" for i, lbl in
+                                                 enumerate(elem_labels_p)])
+    ei = int(elem_sel.split("E")[1].split(" ")[0])
+    e  = ed[ei]
+    dof_lbls = [f"d{g}" for g in e["gdofs"]]
+    show_matrix(e["k_glob"], row_labels=dof_lbls, col_labels=dof_lbls,
+                caption=f"[K]ₑ for E{ei} mapped to global DOFs {e['gdofs']}")
+
+    st.markdown(f"**Global DOF mapping for E{ei}:**")
+    dm_rows = [{"Local DOF": f"u{e['ni']}/v{e['ni']}/θ{e['ni']}/u{e['nj']}/v{e['nj']}/θ{e['nj']}".split("/")[li],
+                "Global Index": g}
+               for li, g in enumerate(e["gdofs"])]
+    st.dataframe(pd.DataFrame(dm_rows), use_container_width=True, hide_index=True)
+
+
+# ── Step 5: Assembly ──────────────────────────────────────────────────────────
+elif step == 5:
+    st.markdown("<div class='step-card'>", unsafe_allow_html=True)
+    st.markdown("<span class='step-title'>Step 5 — Global Assembly [K] and {F}</span>",
+                unsafe_allow_html=True)
+    st.markdown("""
+<span class='step-subtitle'>All element matrices scattered into the global nDOF×nDOF system</span>
+<div class='formula-box'>
+  [K] = Σ (element by element scatter-add of [K]ₑ)
+  {F} = applied nodal loads vector (size nDOF)
+
+  Scatter rule: K[row_global, col_global] += Ke[row_local, col_local]
+</div>
+""", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    nDOF = res["nDOF"]
+    dof_lbls = [f"d{i}" for i in range(nDOF)]
+    col_k, col_f = st.columns([3, 1])
+    with col_k:
+        show_matrix(res["K"], row_labels=dof_lbls, col_labels=dof_lbls,
+                    caption=f"Global [K] — {nDOF}×{nDOF} (kN/m)",
+                    highlight_rows=res["free_global"], highlight_cols=res["free_global"])
+    with col_f:
+        show_vector(res["F"], labels=dof_lbls, caption="{F} — Load vector (kN / kN·m)",
+                    highlight=[i for i,v in enumerate(res["F"]) if abs(v) > 1e-10])
+
+    st.info(f"ℹ️ Highlighted rows/columns = **Free DOFs** {res['free_global']} that will be solved. "
+            f"Fixed DOFs {res['fixed_global']} are eliminated in the next step.")
+
+
+# ── Step 6: Partitioning & BCs ────────────────────────────────────────────────
+elif step == 6:
+    st.markdown("<div class='step-card'>", unsafe_allow_html=True)
+    st.markdown("<span class='step-title'>Step 6 — Partition & Apply Boundary Conditions</span>",
+                unsafe_allow_html=True)
+    st.markdown("""
+<span class='step-subtitle'>Delete fixed DOF rows/columns → reduced system [Kff]{Uf} = {Ff}</span>
+<div class='formula-box'>
+  Partition: DOFs split into FREE (f) and CONSTRAINED (c)
+
+  ┌ Kff  Kfc ┐ ┌ Uf ┐   ┌ Ff ┐
+  │          │ │    │ = │    │
+  └ Kcf  Kcc ┘ └ Uc ┘   └ Fc ┘
+
+  Since Uc = 0 (all fixed DOFs have zero prescribed displacement):
+       [Kff] {Uf} = {Ff}   ← this is what we solve!
+
+  Size reduction: nDOF → nFree × nFree
+</div>
+""", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    ff = res["free_global"]
+    nf = len(ff)
+    dof_lbls_f = [f"d{g}" for g in ff]
+
+    col_kff, col_ff = st.columns([3, 1])
+    with col_kff:
+        show_matrix(res["Kff"], row_labels=dof_lbls_f, col_labels=dof_lbls_f,
+                    caption=f"[Kff] — Reduced stiffness {nf}×{nf}")
+    with col_ff:
+        show_vector(res["Ff"], labels=dof_lbls_f, caption="{Ff} — Reduced loads")
+
+    st.markdown(f"""
+- **Full system:**   {res['nDOF']} × {res['nDOF']}  →  **Reduced system:** {nf} × {nf}
+- Eliminated DOFs: {res['fixed_global']}  (all prescribed = 0 in this problem)
+""")
+
+
+# ── Step 7: Solve ─────────────────────────────────────────────────────────────
+elif step == 7:
+    col_v, col_t = st.columns([1, 1.3])
+    with col_v:
+        fig7 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
+                          U=res["U"], dof_map=res["dof_map"],
+                          show_deformed=True, show_loads=True)
+        st.pyplot(fig7, use_container_width=True)
+        st.caption("— Deformed shape (dashed red, exaggerated scale)")
+
+    with col_t:
+        st.markdown("<div class='step-card'>", unsafe_allow_html=True)
+        st.markdown("<span class='step-title'>Step 7 — Solve {Uf} = [Kff]⁻¹ {Ff}</span>",
+                    unsafe_allow_html=True)
+        st.markdown("""
+<span class='step-subtitle'>Gaussian elimination with partial pivoting → nodal displacements</span>
+<div class='formula-box'>
+  [Kff] · {Uf} = {Ff}
+  Solved by numpy.linalg.solve (LU factorization)
+  Units: metres (m) for translations, radians (rad) for rotations
+</div>
+""", unsafe_allow_html=True)
+
+        nDOF = res["nDOF"]
+        dof_lbls = [f"d{i}" for i in range(nDOF)]
+        U_tagged = []
+        for gi in range(nDOF):
+            tag = "FIXED=0" if gi in res["fixed_global"] else "SOLVED"
+            dof_name = ["u","v","θ"][gi % 3]
+            node_id  = gi // 3
+            U_tagged.append({
+                "DOF": f"d{gi}", "Node": f"N{node_id}", "Type": dof_name,
+                "Value": fmt_val(res["U"][gi], 6),
+                "Status": tag,
+            })
+        df_U = pd.DataFrame(U_tagged)
+        def col_status(val):
+            return "background-color:#1a4731;color:#4ade80" if val=="SOLVED" else \
+                   "background-color:#1a2a4a;color:#94a3b8"
+        st.dataframe(df_U.style.applymap(col_status, subset=["Status"]),
+                     use_container_width=True, hide_index=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ── Step 8: Member End Forces ─────────────────────────────────────────────────
+elif step == 8:
+    st.markdown("<div class='step-card'>", unsafe_allow_html=True)
+    st.markdown("<span class='step-title'>Step 8 — Member End Forces {f'} = [k][T]{u_global}</span>",
+                unsafe_allow_html=True)
+    st.markdown("""
+<span class='step-subtitle'>Recover axial force N, shear V, moment M at each member end in LOCAL axes</span>
+<div class='formula-box'>
+  {u_local} = [T] · {u_global_element}     ← transform displacements to local
+  {f_local} = [k] · {u_local}              ← apply local stiffness
+
+  Sign convention (local x = member axis, +ve left to right):
+    N  — axial  (+ve = tension)
+    V  — shear  (+ve = upward at i-end)
+    M  — moment (+ve = sagging / counter-clockwise)
+</div>
+""", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    force_rows = []
+    for i, (mr, e) in enumerate(zip(res["member_results"], ed)):
+        force_rows.append({
+            "Elem": f"E{i}", "Label": elem_labels_p[i],
+            "N_i (kN)": f"{mr['N_i']:.3f}", "V_i (kN)": f"{mr['V_i']:.3f}",
+            "M_i (kN·m)": f"{mr['M_i']:.3f}",
+            "N_j (kN)": f"{mr['N_j']:.3f}", "V_j (kN)": f"{mr['V_j']:.3f}",
+            "M_j (kN·m)": f"{mr['M_j']:.3f}",
+        })
+    st.dataframe(pd.DataFrame(force_rows), use_container_width=True, hide_index=True)
+
+    # Local force vectors for selected element
+    st.divider()
+    elem_sel = st.selectbox("Detail view — Select Element:", [f"E{i} — {lbl}" for i, lbl in
+                                                               enumerate(elem_labels_p)])
+    ei = int(elem_sel.split("E")[1].split(" ")[0])
+    mr = res["member_results"][ei]
+    e  = ed[ei]
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown("**{u_global} for element**")
+        gdof_lbls = [f"d{g}" for g in e["gdofs"]]
+        show_vector(mr["u_global"], labels=gdof_lbls, caption="Global displacements (m / rad)")
+    with c2:
+        st.markdown("**{u_local} = [T]·{u_global}**")
+        loc_lbls = [f"u'{e['ni']}","v'{e['ni']}","θ'{e['ni']}",f"u'{e['nj']}","v'{e['nj']}","θ'{e['nj']}"]
+        show_vector(mr["u_local"], labels=loc_lbls, caption="Local displacements (m / rad)")
+    with c3:
+        st.markdown("**{f_local} = [k]·{u_local}**")
+        show_vector(mr["f_local"], labels=loc_lbls, caption="Local end forces (kN / kN·m)")
+
+    st.divider()
+    fig_bmd = draw_bmd_sfd(nodes_parsed, elems_parsed, res["member_results"], elem_labels_p)
+    st.pyplot(fig_bmd, use_container_width=True)
+
+
+# ── Step 9: Reactions ─────────────────────────────────────────────────────────
+elif step == 9:
+    col_v, col_t = st.columns([1, 1.3])
+    with col_v:
+        fig9 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
+                          U=res["U"], dof_map=res["dof_map"],
+                          show_deformed=True, show_reactions=True,
+                          reactions=res["reactions"])
+        st.pyplot(fig9, use_container_width=True)
+
+    with col_t:
+        st.markdown("<div class='step-card'>", unsafe_allow_html=True)
+        st.markdown("<span class='step-title'>Step 9 — Support Reactions & Equilibrium</span>",
+                    unsafe_allow_html=True)
+        st.markdown("""
+<span class='step-subtitle'>{R} = [K]{U} − {F}  at fixed DOFs</span>
+<div class='formula-box'>
+  Reactions are the forces the supports must exert to
+  maintain equilibrium. They are recovered as:
+
+      {R_fixed} = [Kcf]{Uf} + [Kcc]{Uc} − {Fc}
+                = [K]{U} − {F}  (at fixed DOF rows)
+
+  Equilibrium check:
+      ΣFx = 0  (sum of all horizontal reactions + loads)
+      ΣFy = 0  (sum of all vertical reactions + loads)
+      ΣM  = 0  (sum of all moment reactions + loads)
+</div>
+""", unsafe_allow_html=True)
+
+        rx_rows = []
+        dof_names_map = {0:"Rx (kN)", 1:"Ry (kN)", 2:"RM (kN·m)"}
+        for gi, val in sorted(res["reactions"].items()):
+            nid  = gi // 3; ld = gi % 3
+            rx_rows.append({"Node": f"N{nid}", "DOF": f"d{gi}",
+                            "Type": dof_names_map[ld], "Reaction": f"{val:.4f}"})
+        st.dataframe(pd.DataFrame(rx_rows), use_container_width=True, hide_index=True)
+
+        st.markdown("**⚖️ Global Equilibrium Check**")
+        eq = res["eq_check"]
+        tol = 1e-3
+        for label, val in eq.items():
+            passed = abs(val) < tol
+            badge  = "✅" if passed else "❌"
+            color  = "#4ade80" if passed else "#f87171"
+            st.markdown(
+                f"<span style='color:{color}; font-family:Courier New; font-size:14px;'>"
+                f"{badge} {label} = {val:.6f} kN  "
+                f"({'OK — equilibrium satisfied' if passed else 'WARN — check model'})"
+                f"</span>", unsafe_allow_html=True)
+
+        # Applied load summary vs reactions
+        st.divider()
+        st.markdown("**📋 Load vs. Reaction Summary**")
+        total_Fx = sum(v for nid, ldm in nodal_loads_parsed.items()
+                       for ld, v in ldm.items() if ld == 0)
+        total_Fy = sum(v for nid, ldm in nodal_loads_parsed.items()
+                       for ld, v in ldm.items() if ld == 1)
+        rx_Fx = sum(v for gi, v in res["reactions"].items() if gi % 3 == 0)
+        rx_Fy = sum(v for gi, v in res["reactions"].items() if gi % 3 == 1)
+        st.markdown(f"""
+| Component | Applied Load | Reactions | Net |
+|-----------|-------------|-----------|-----|
+| Horizontal (Fx) | {total_Fx:.3f} kN | {rx_Fx:.3f} kN | {total_Fx+rx_Fx:.6f} |
+| Vertical (Fy)   | {total_Fy:.3f} kN | {rx_Fy:.3f} kN | {total_Fy+rx_Fy:.6f} |
+""")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  FOOTER
+# ══════════════════════════════════════════════════════════════════════════════
+st.divider()
+ref_c1, ref_c2, ref_c3 = st.columns(3)
+with ref_c1:
+    st.markdown("""
+**📚 References**
+- Kassimali A. — *Matrix Analysis of Structures* (Ch. 3–6)
+- McGuire, Gallagher, Ziemian — *Matrix Structural Analysis*
+- Bhavikatti S.S. — *Matrix Methods of Structural Analysis*
+""")
+with ref_c2:
+    st.markdown("""
+**🧮 DSM Formula Card**
+- [k] = 6×6 Euler-Bernoulli stiffness
+- [T] = block-diagonal rotation matrix
+- [K]ₑ = [T]ᵀ[k][T] (global element)
+- [K] = Σ[K]ₑ (scatter-add assembly)
+""")
+with ref_c3:
+    st.markdown("""
+**🚀 Deploy This App**
+```bash
+pip install streamlit numpy pandas matplotlib
+streamlit run dsm_2d_frame.py
+```
+Or push to GitHub and connect at  
+[share.streamlit.io](https://share.streamlit.io)
+""")
