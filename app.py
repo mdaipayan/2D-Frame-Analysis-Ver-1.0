@@ -693,10 +693,14 @@ res = st.session_state.result
 
 if res is None:
     # ── Welcome screen ─────────────────────────────────────────
-    col1, col2 = st.columns([1.2, 1])
-    with col1:
-        with st.expander("📖 What is the Direct Stiffness Method?", expanded=False):
-            st.markdown("""
+    fig_welcome = draw_frame(
+        nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
+        elem_labels=elem_labels_p, node_labels=True)
+    st.pyplot(fig_welcome, use_container_width=True)
+    st.caption("Select a preset in the sidebar and click **🚀 Run DSM Analysis** to begin")
+
+    with st.expander("📖 What is the Direct Stiffness Method?", expanded=False):
+        st.markdown("""
 The <b>Direct Stiffness Method (DSM)</b> is the fundamental algorithm behind every commercial
 structural analysis software (STAAD, ETABS, SAP2000, OpenSees…).
 <br><br>
@@ -717,13 +721,6 @@ every transformation is shown step by step so you can trace exactly what the com
   <li>Reactions & Equilibrium Check</li>
 </ol>
 """, unsafe_allow_html=True)
-
-    with col2:
-        fig_welcome = draw_frame(
-            nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
-            elem_labels=elem_labels_p, node_labels=True)
-        st.pyplot(fig_welcome, use_container_width=True)
-        st.caption("← Select a preset and click **🚀 Run DSM Analysis** to begin")
 
     with st.expander("📚 DSM Equation Reference — click to expand", expanded=False):
         st.markdown("""
