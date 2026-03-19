@@ -27,27 +27,28 @@ st.set_page_config(
 # ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-  /* Dark engineering theme */
-  .main { background:#0d1117; }
-  .stApp { background:#0d1117; }
-  section[data-testid="stSidebar"] { background:#0d1a2e; }
-  h1,h2,h3,h4,h5,h6 { color:#f0b429 !important; font-family: 'Courier New', monospace; }
+  /* Light engineering theme */
+  .main { background:#f8fafc; }
+  .stApp { background:#f8fafc; }
+  section[data-testid="stSidebar"] { background:#eef2f7; border-right:1px solid #cbd5e1; }
+  h1,h2,h3,h4,h5,h6 { color:#1e40af !important; font-family: 'Courier New', monospace; }
   .stDataFrame { font-family: 'Courier New', monospace; font-size:12px; }
   .step-card {
-    background:#0d2137; border:1px solid #f0b429;
+    background:#ffffff; border:1px solid #2563eb;
     border-radius:8px; padding:18px; margin-bottom:16px;
+    box-shadow:0 1px 6px rgba(37,99,235,0.08);
   }
   .formula-box {
-    background:#111c2d; border-left:4px solid #f0b429;
+    background:#f1f5f9; border-left:4px solid #2563eb;
     padding:12px 16px; border-radius:4px;
-    font-family:'Courier New',monospace; font-size:13px; color:#e0e0e0;
+    font-family:'Courier New',monospace; font-size:13px; color:#1e293b;
     white-space:pre-wrap; margin:10px 0;
   }
-  .badge-safe   { background:#1a4731; color:#4ade80; padding:3px 10px; border-radius:12px; font-size:12px; }
-  .badge-warn   { background:#4a2e00; color:#f0b429; padding:3px 10px; border-radius:12px; font-size:12px; }
-  .badge-fail   { background:#4a1010; color:#f87171; padding:3px 10px; border-radius:12px; font-size:12px; }
-  .step-title { font-size:18px; font-weight:700; color:#f0b429; font-family:'Courier New',monospace; }
-  .step-subtitle { font-size:13px; color:#94a3b8; margin-bottom:8px; }
+  .badge-safe   { background:#dcfce7; color:#166534; padding:3px 10px; border-radius:12px; font-size:12px; }
+  .badge-warn   { background:#fef9c3; color:#854d0e; padding:3px 10px; border-radius:12px; font-size:12px; }
+  .badge-fail   { background:#fee2e2; color:#991b1b; padding:3px 10px; border-radius:12px; font-size:12px; }
+  .step-title { font-size:18px; font-weight:700; color:#1e40af; font-family:'Courier New',monospace; }
+  .step-subtitle { font-size:13px; color:#475569; margin-bottom:8px; }
   .ref-tag { font-size:11px; color:#64748b; font-style:italic; }
 </style>
 """, unsafe_allow_html=True)
@@ -255,11 +256,11 @@ def show_matrix(M, row_labels=None, col_labels=None, caption="", highlight_rows=
         if highlight_rows:
             for r in highlight_rows:
                 if r < len(styles.index):
-                    styles.iloc[r] = "background-color:#1a4731; color:#4ade80"
+                    styles.iloc[r] = "background-color:#dcfce7; color:#166534"
         if highlight_cols:
             for c in highlight_cols:
                 if c < len(styles.columns):
-                    styles.iloc[:, c] = "background-color:#1a2a4a; color:#93c5fd"
+                    styles.iloc[:, c] = "background-color:#dbeafe; color:#1e40af"
         return styles
 
     styled = df.style.apply(styler, axis=None)
@@ -279,7 +280,7 @@ def show_vector(v, labels=None, caption="", highlight=None):
         if highlight:
             for h in highlight:
                 if h < len(styles.index):
-                    styles.iloc[h] = "background-color:#4a2e00; color:#f0b429"
+                    styles.iloc[h] = "background-color:#fef9c3; color:#854d0e"
         return styles
 
     styled = df.style.apply(styler, axis=None)
@@ -292,9 +293,9 @@ def show_vector(v, labels=None, caption="", highlight=None):
 #  FRAME VISUALIZATION (Matplotlib)
 # ══════════════════════════════════════════════════════════════════════════════
 SUPPORT_SYMBOLS = {
-    "fixed":  "#f87171",
-    "pin":    "#4ade80",
-    "roller": "#60a5fa",
+    "fixed":  "#dc2626",
+    "pin":    "#16a34a",
+    "roller": "#2563eb",
 }
 
 def classify_support(fixed_ldofs):
@@ -308,18 +309,18 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
                show_deformed=False, show_reactions=False,
                elem_labels=None, node_labels=True):
     """Draw the 2D frame with supports, loads, deformed shape, reactions."""
-    fig, ax = plt.subplots(figsize=(9, 7), facecolor="#0d1117")
-    ax.set_facecolor("#0d1117")
-    ax.tick_params(colors="#64748b")
+    fig, ax = plt.subplots(figsize=(9, 7), facecolor="#f8fafc")
+    ax.set_facecolor("#ffffff")
+    ax.tick_params(colors="#334155")
     for spine in ax.spines.values():
-        spine.set_edgecolor("#1e293b")
+        spine.set_edgecolor("#cbd5e1")
 
     xs = [n[0] for n in nodes]; ys = [n[1] for n in nodes]
     span = max(max(xs)-min(xs), max(ys)-min(ys), 1.0)
     arrowsc = span * 0.08   # arrow scale
 
     # ── Draw elements ──────────────────────────────────────────
-    colors = ["#60a5fa","#f0b429","#c084fc","#34d399","#f87171"]
+    colors = ["#2563eb","#d97706","#7c3aed","#059669","#dc2626"]
     for idx, (ni, nj) in enumerate(elements):
         xi, yi = nodes[ni]; xj, yj = nodes[nj]
         col = colors[idx % len(colors)]
@@ -328,7 +329,7 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
             mx, my = (xi+xj)/2, (yi+yj)/2
             ax.text(mx, my, elem_labels[idx], color=col, fontsize=8,
                     ha="center", va="bottom", fontfamily="monospace",
-                    bbox=dict(boxstyle="round,pad=0.2", fc="#0d1117", ec=col, lw=0.8))
+                    bbox=dict(boxstyle="round,pad=0.2", fc="#ffffff", ec=col, lw=0.8))
 
     # ── Draw deformed shape ────────────────────────────────────
     if show_deformed and U is not None and dof_map is not None:
@@ -339,13 +340,13 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
             ui = U[dof_map[ni][:2]]; uj = U[dof_map[nj][:2]]
             ax.plot([xi+sc*ui[0], xj+sc*uj[0]],
                     [yi+sc*ui[1], yj+sc*uj[1]],
-                    color="#f87171", lw=2, ls="--", zorder=4, alpha=0.85)
+                    color="#dc2626", lw=2, ls="--", zorder=4, alpha=0.85)
 
     # ── Draw nodes ────────────────────────────────────────────
     for i, (x, y) in enumerate(nodes):
-        ax.scatter(x, y, s=60, color="white", zorder=6)
+        ax.scatter(x, y, s=60, color="#1e293b", zorder=6)
         if node_labels:
-            ax.text(x, y+span*0.025, f"N{i}", color="#e2e8f0",
+            ax.text(x, y+span*0.025, f"N{i}", color="#1e293b",
                     fontsize=8, ha="center", va="bottom",
                     fontfamily="monospace", fontweight="bold", zorder=7)
 
@@ -354,21 +355,21 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
         x, y = nodes[nid]
         stype = classify_support(ldofs)
         if stype == "fixed":
-            ax.barh(y, -span*0.04, height=span*0.12, left=x, color="#f87171", alpha=0.4, zorder=2)
+            ax.barh(y, -span*0.04, height=span*0.12, left=x, color="#dc2626", alpha=0.35, zorder=2)
             for dy in np.linspace(-span*0.06, span*0.06, 5):
                 ax.plot([x-span*0.04, x-span*0.06], [y+dy, y+dy+span*0.015],
-                        color="#f87171", lw=1, alpha=0.7)
+                        color="#dc2626", lw=1, alpha=0.7)
         elif stype == "pin":
             tri = plt.Polygon([[x, y],[x-span*0.03, y-span*0.06],[x+span*0.03, y-span*0.06]],
-                              closed=True, color="#4ade80", alpha=0.5, zorder=2)
+                              closed=True, color="#16a34a", alpha=0.5, zorder=2)
             ax.add_patch(tri)
             ax.plot([x-span*0.05, x+span*0.05],[y-span*0.065, y-span*0.065],
-                    color="#4ade80", lw=2)
+                    color="#16a34a", lw=2)
         else:
             tri = plt.Polygon([[x, y],[x-span*0.03, y-span*0.05],[x+span*0.03, y-span*0.05]],
-                              closed=True, color="#60a5fa", alpha=0.4, zorder=2)
+                              closed=True, color="#2563eb", alpha=0.35, zorder=2)
             ax.add_patch(tri)
-            circle = plt.Circle((x, y-span*0.07), span*0.022, color="#60a5fa", alpha=0.5, zorder=2)
+            circle = plt.Circle((x, y-span*0.07), span*0.022, color="#2563eb", alpha=0.4, zorder=2)
             ax.add_patch(circle)
 
     # ── Draw loads ────────────────────────────────────────────
@@ -379,19 +380,19 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
                 if ld == 0:  # Fx
                     dx = arrowsc * (1 if val > 0 else -1)
                     ax.annotate("", xy=(x, y), xytext=(x - dx, y),
-                                arrowprops=dict(arrowstyle="->", color="#fbbf24", lw=2))
+                                arrowprops=dict(arrowstyle="->", color="#d97706", lw=2))
                     ax.text(x - dx/2, y + arrowsc*0.3, f"{val:.0f} kN",
-                            color="#fbbf24", fontsize=8, ha="center", fontfamily="monospace")
+                            color="#d97706", fontsize=8, ha="center", fontfamily="monospace")
                 elif ld == 1:  # Fy
                     dy = arrowsc * (1 if val > 0 else -1)
                     ax.annotate("", xy=(x, y), xytext=(x, y - dy),
-                                arrowprops=dict(arrowstyle="->", color="#fbbf24", lw=2))
+                                arrowprops=dict(arrowstyle="->", color="#d97706", lw=2))
                     ax.text(x + arrowsc*0.4, y - dy/2, f"{val:.0f} kN",
-                            color="#fbbf24", fontsize=8, ha="left", fontfamily="monospace")
+                            color="#d97706", fontsize=8, ha="left", fontfamily="monospace")
 
     # ── Draw DOF arrows (for step 1) ──────────────────────────
     if show_dofs and dof_map is not None:
-        colors_dof = ["#60a5fa","#4ade80","#c084fc"]
+        colors_dof = ["#1d4ed8","#15803d","#7c3aed"]
         labels_dof = ["u","v","θ"]
         for nid, gdofs in dof_map.items():
             x, y = nodes[nid]
@@ -414,40 +415,40 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
                 if ld == 0:
                     dx = arrowsc * (1 if val > 0 else -1)
                     ax.annotate("", xy=(x+dx, y), xytext=(x, y),
-                                arrowprops=dict(arrowstyle="->", color="#f87171", lw=2))
+                                arrowprops=dict(arrowstyle="->", color="#dc2626", lw=2))
                     ax.text(x+dx, y-arrowsc*0.4, f"Rx={val:.1f}",
-                            color="#f87171", fontsize=7, ha="center", fontfamily="monospace")
+                            color="#dc2626", fontsize=7, ha="center", fontfamily="monospace")
                 elif ld == 1:
                     dy = arrowsc * (1 if val > 0 else -1)
                     ax.annotate("", xy=(x, y+dy), xytext=(x, y),
-                                arrowprops=dict(arrowstyle="->", color="#f87171", lw=2))
+                                arrowprops=dict(arrowstyle="->", color="#dc2626", lw=2))
                     ax.text(x-arrowsc*0.6, y+dy, f"Ry={val:.1f}",
-                            color="#f87171", fontsize=7, ha="right", fontfamily="monospace")
+                            color="#dc2626", fontsize=7, ha="right", fontfamily="monospace")
 
     margin = span * 0.2
     ax.set_xlim(min(xs)-margin, max(xs)+margin)
     ax.set_ylim(min(ys)-margin, max(ys)+margin)
     ax.set_aspect("equal")
-    ax.grid(True, color="#1e293b", lw=0.5, alpha=0.5)
-    ax.set_xlabel("X (m)", color="#64748b", fontfamily="monospace")
-    ax.set_ylabel("Y (m)", color="#64748b", fontfamily="monospace")
+    ax.grid(True, color="#e2e8f0", lw=0.5, alpha=0.8)
+    ax.set_xlabel("X (m)", color="#475569", fontfamily="monospace")
+    ax.set_ylabel("Y (m)", color="#475569", fontfamily="monospace")
     plt.tight_layout()
     return fig
 
 
 def draw_bmd_sfd(nodes, elements, member_results, elem_labels=None):
     """Draw Bending Moment and Shear Force diagrams."""
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5), facecolor="#0d1117")
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), facecolor="#f8fafc")
     titles = ["Bending Moment Diagram (kN·m)", "Shear Force Diagram (kN)"]
-    colors = ["#c084fc", "#34d399"]
+    colors = ["#7c3aed", "#0891b2"]
 
     for ax_idx, ax in enumerate(axes):
-        ax.set_facecolor("#0d1117")
-        ax.tick_params(colors="#64748b")
+        ax.set_facecolor("#ffffff")
+        ax.tick_params(colors="#334155")
         for spine in ax.spines.values():
-            spine.set_edgecolor("#1e293b")
-        ax.set_title(titles[ax_idx], color="#f0b429", fontfamily="monospace", pad=10)
-        ax.grid(True, color="#1e293b", lw=0.5)
+            spine.set_edgecolor("#cbd5e1")
+        ax.set_title(titles[ax_idx], color="#1e40af", fontfamily="monospace", pad=10)
+        ax.grid(True, color="#e2e8f0", lw=0.5)
 
         xs = [n[0] for n in nodes]; ys = [n[1] for n in nodes]
         span = max(max(xs)-min(xs), max(ys)-min(ys), 1.0)
@@ -455,7 +456,7 @@ def draw_bmd_sfd(nodes, elements, member_results, elem_labels=None):
         # Draw element skeleton
         for ni, nj in elements:
             ax.plot([nodes[ni][0], nodes[nj][0]], [nodes[ni][1], nodes[nj][1]],
-                    color="#334155", lw=1, zorder=1)
+                    color="#94a3b8", lw=1, zorder=1)
 
         for idx, ((ni, nj), mr) in enumerate(zip(elements, member_results)):
             xi, yi = nodes[ni]; xj, yj = nodes[nj]
@@ -481,7 +482,7 @@ def draw_bmd_sfd(nodes, elements, member_results, elem_labels=None):
 
             col = colors[idx % len(colors)]
             # Baseline
-            ax.plot([xi, xj], [yi, yj], color="#475569", lw=1)
+            ax.plot([xi, xj], [yi, yj], color="#94a3b8", lw=1)
             # Filled BMD/SFD
             bx = [xi + t*(xj-xi) for t in [k/n_pts for k in range(n_pts+1)]]
             by = [yi + t*(yj-yi) for t in [k/n_pts for k in range(n_pts+1)]]
@@ -623,10 +624,10 @@ if run_btn:
 #  HEADER
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown("""
-<h1 style='text-align:center; font-family:Courier New; color:#f0b429; letter-spacing:2px;'>
+<h1 style='text-align:center; font-family:Courier New; color:#1e40af; letter-spacing:2px;'>
   🏗️ 2D FRAME ANALYZER — DIRECT STIFFNESS METHOD
 </h1>
-<p style='text-align:center; color:#94a3b8; font-family:Courier New; font-size:14px;'>
+<p style='text-align:center; color:#475569; font-family:Courier New; font-size:14px;'>
   Glass-Box Educational Tool &nbsp;|&nbsp; B.Tech / M.Tech Structural Analysis
 </p>
 """, unsafe_allow_html=True)
@@ -648,7 +649,7 @@ This app makes DSM a <b>glass box</b> — every intermediate matrix, every equat
 every transformation is shown step by step so you can trace exactly what the computer does.
 <br><br>
 <b>DSM in 10 Steps:</b>
-<ol style='font-family:Courier New; font-size:13px; color:#e2e8f0; line-height:1.9;'>
+<ol style='font-family:Courier New; font-size:13px; color:#1e293b; line-height:1.9;'>
   <li>Problem Setup — geometry, properties</li>
   <li>DOF Numbering — 3 DOFs per node</li>
   <li>Local Stiffness [k] — 6×6 per element</li>
@@ -722,7 +723,7 @@ STEP_NAMES = [
 tab_cols = st.columns(len(STEP_NAMES))
 for i, (col, name) in enumerate(zip(tab_cols, STEP_NAMES)):
     with col:
-        active = "background:#f0b429;color:#0d1117;" if i == st.session_state.step else ""
+        active = "background:#2563eb;color:#ffffff;" if i == st.session_state.step else ""
         if st.button(name.split("·")[0].strip(), key=f"tab_{i}",
                      use_container_width=True, type="secondary"):
             st.session_state.step = i
@@ -830,8 +831,8 @@ Total DOFs = 3 × nNodes
         df_dofs = pd.DataFrame(dof_rows)
 
         def color_bc(val):
-            if val == "FIXED": return "background-color:#4a1010;color:#f87171"
-            if val == "FREE":  return "background-color:#1a4731;color:#4ade80"
+            if val == "FIXED": return "background-color:#fee2e2;color:#991b1b"
+            if val == "FREE":  return "background-color:#dcfce7;color:#166534"
             return ""
         styled_dofs = df_dofs.style.applymap(color_bc, subset=["u BC","v BC","θ BC"])
         st.dataframe(styled_dofs, use_container_width=True, hide_index=True)
@@ -933,8 +934,8 @@ elif step == 3:
         fig3.axes[0].annotate(
             f"α={e['alpha_deg']:.1f}°",
             xy=((ni[0]+nj[0])/2, (ni[1]+nj[1])/2),
-            color="#c084fc", fontsize=10, fontfamily="monospace",
-            bbox=dict(boxstyle="round", fc="#0d1117", ec="#c084fc"),
+            color="#7c3aed", fontsize=10, fontfamily="monospace",
+            bbox=dict(boxstyle="round", fc="#ffffff", ec="#7c3aed"),
         )
         st.pyplot(fig3, use_container_width=True)
 
@@ -1077,8 +1078,8 @@ elif step == 7:
             })
         df_U = pd.DataFrame(U_tagged)
         def col_status(val):
-            return "background-color:#1a4731;color:#4ade80" if val=="SOLVED" else \
-                   "background-color:#1a2a4a;color:#94a3b8"
+            return "background-color:#dcfce7;color:#166534" if val=="SOLVED" else \
+                   "background-color:#f1f5f9;color:#475569"
         st.dataframe(df_U.style.applymap(col_status, subset=["Status"]),
                      use_container_width=True, hide_index=True)
         st.markdown("</div>", unsafe_allow_html=True)
@@ -1184,7 +1185,7 @@ elif step == 9:
         for label, val in eq.items():
             passed = abs(val) < tol
             badge  = "✅" if passed else "❌"
-            color  = "#4ade80" if passed else "#f87171"
+            color  = "#166534" if passed else "#991b1b"
             st.markdown(
                 f"<span style='color:{color}; font-family:Courier New; font-size:14px;'>"
                 f"{badge} {label} = {val:.6f} kN  "
