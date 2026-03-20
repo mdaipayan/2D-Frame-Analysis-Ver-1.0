@@ -1393,8 +1393,6 @@ with ref_c2:
 - [K] = Σ[K]ₑ (scatter-add assembly)
 """)
 with ref_c3:
-    st.markdown("""
-**🚀 Deploy This App**
-```bash
-pip install streamlit numpy pandas matplotlib
-streamlit run dsm_2d_frame.py
+    st.markdown("**🚀 Deploy This App**")
+    st.code("pip install streamlit numpy pandas matplotlib\nstreamlit run dsm_2d_frame.py", language="bash")
+    st.markdown("Or push to GitHub and connect at  \n[share.streamlit.io](https://share.streamlit.io)")
