@@ -187,6 +187,9 @@ def run_dsm(nodes, elements, fixed_dofs, nodal_loads, E, A, I):
     Ff  = F[ff]
 
     # ── Step 7: Solve ─────────────────────────────────────────
+    cond_num = np.linalg.cond(Kff)
+    if cond_num > 1e10:
+        st.warning(f"⚠️ Warning: The stiffness matrix is highly ill-conditioned (κ ≈ {cond_num:.2e}). Results may be plagued by round-off errors. Check for disconnected elements or extreme differences in element stiffness.")
     try:
         Uf = np.linalg.solve(Kff, Ff)
     except np.linalg.LinAlgError:
@@ -696,7 +699,8 @@ if res is None:
     fig_welcome = draw_frame(
         nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
         elem_labels=elem_labels_p, node_labels=True)
-    st.pyplot(fig_welcome, use_container_width=True)
+    st.pyplot(fig_welcome, width="stretch")
+    plt.close(fig_welcome) 
     st.caption("Select a preset in the sidebar and click **🚀 Run DSM Analysis** to begin")
 
     with st.expander("📖 What is the Direct Stiffness Method?", expanded=False):
