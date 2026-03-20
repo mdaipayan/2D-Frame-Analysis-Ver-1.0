@@ -1,10 +1,10 @@
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║   2D Frame Analyzer — Direct Stiffness Method (DSM)             ║
-║   Glass-Box Educational Tool for B.Tech / M.Tech Students       ║
-║   Author  : Educational Structural Engineering Lab              ║
-║   Deploy  : streamlit run dsm_2d_frame.py                       ║
-║   Requires: streamlit, numpy, pandas, matplotlib                ║
+║   2D Frame Analyzer — Direct Stiffness Method (DSM) First        ║
+║   Glass-Box Educational Tool for B.Tech / M.Tech Students        ║
+║   Author  : Educational Structural Engineering Lab               ║
+║   Deploy  : streamlit run dsm_2d_frame.py                        ║
+║   Requires: streamlit, numpy, pandas, matplotlib                 ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
 
