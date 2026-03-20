@@ -448,10 +448,9 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
                     ax.text(x-arrowsc*0.6, y+dy, f"Ry={val:.1f}",
                             color="#dc2626", fontsize=7, ha="right", fontfamily="monospace")
 
-    margin = span * 0.2
-    ax.set_xlim(min(xs)-margin, max(xs)+margin)
-    ax.set_ylim(min(ys)-margin, max(ys)+margin)
-    ax.set_aspect("equal")
+    ax.autoscale(enable=True, axis='both', tight=False)
+    ax.set_aspect('equal', adjustable='datalim')
+    ax.margins(0.15)  # Adds a 15% dynamic padding around all drawn elements
     ax.grid(True, color="#e2e8f0", lw=0.5, alpha=0.8)
     ax.set_xlabel("X (m)", color="#475569", fontfamily="monospace")
     ax.set_ylabel("Y (m)", color="#475569", fontfamily="monospace")
@@ -577,10 +576,9 @@ def draw_bmd_sfd(nodes, elements, member_results, elem_labels=None, member_loads
             ax.text(xj + scale * vals[-1] * perp[0] * 1.1, yj + scale * vals[-1] * perp[1] * 1.1,
                     f"{val_end:.1f}", color=col, fontsize=7, ha="center", fontfamily="monospace")
 
-        ax.set_aspect("equal")
-        margin = span * 0.25
-        ax.set_xlim(min(xs)-margin, max(xs)+margin)
-        ax.set_ylim(min(ys)-margin, max(ys)+margin)
+        ax.autoscale(enable=True, axis='both', tight=False)
+        ax.set_aspect('equal', adjustable='datalim')
+        ax.margins(0.15)
 
     plt.tight_layout()
     return fig
