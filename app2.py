@@ -396,7 +396,7 @@ def show_matrix(M, row_labels=None, col_labels=None, caption="",
         return styles
 
     styled = df.style.apply(styler, axis=None)
-    st.dataframe(styled, use_container_width=True, height=min(35*n+38, 500))
+    st.dataframe(styled, width="stretch", height=min(35*n+38, 500))
     if caption:
         st.caption(caption)
 
@@ -415,7 +415,7 @@ def show_vector(v, labels=None, caption="", highlight=None):
         return styles
 
     styled = df.style.apply(styler, axis=None)
-    st.dataframe(styled, use_container_width=True, height=min(35*n+38, 400))
+    st.dataframe(styled, width="stretch", height=min(35*n+38, 400))
     if caption:
         st.caption(caption)
 
@@ -769,7 +769,7 @@ with st.sidebar:
         [{"Node": f"N{i+1}", "x (m)": x, "y (m)": y}
          for i,(x,y) in enumerate(P["nodes"])]
     )
-    node_df = st.data_editor(node_df, num_rows="dynamic", use_container_width=True,
+    node_df = st.data_editor(node_df, num_rows="dynamic", width="stretch",
                               key=f"nodes_{chosen}")
 
     st.caption("Elements (node index pairs, 1-based)")
@@ -777,7 +777,7 @@ with st.sidebar:
         [{"Elem": f"E{i+1}", "Node i": ni+1, "Node j": nj+1, "Label": lbl}
          for i, ((ni,nj), lbl) in enumerate(zip(P["elements"], P["labels"]))]
     )
-    elem_df = st.data_editor(elem_df, num_rows="dynamic", use_container_width=True,
+    elem_df = st.data_editor(elem_df, num_rows="dynamic", width="stretch",
                               key=f"elems_{chosen}")
 
     st.divider()
@@ -805,7 +805,7 @@ with st.sidebar:
                               "Value (kN or kN·m)": val})
     load_df = pd.DataFrame(load_rows if load_rows else
                            [{"Node":1,"DOF (0=u,1=v,2=θ)":1,"Value (kN or kN·m)":0.0}])
-    load_df = st.data_editor(load_df, num_rows="dynamic", use_container_width=True,
+    load_df = st.data_editor(load_df, num_rows="dynamic", width="stretch",
                               key=f"loads_{chosen}")
 
     # ── NEW: UDL Loads ────────────────────────────────────────
@@ -823,11 +823,11 @@ with st.sidebar:
                   for ei, w in udl_preset.items()]
     udl_df     = pd.DataFrame(udl_rows if udl_rows else
                               [{"Element": "E1", "w (kN/m)": 0.0}])
-    udl_df     = st.data_editor(udl_df, num_rows="dynamic", use_container_width=True,
+    udl_df     = st.data_editor(udl_df, num_rows="dynamic", width="stretch",
                                 key=f"udl_{chosen}")
 
     st.divider()
-    run_btn = st.button("🚀 Run DSM Analysis", type="primary", use_container_width=True)
+    run_btn = st.button("🚀 Run DSM Analysis", type="primary", width="stretch")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -935,7 +935,7 @@ if res is None:
         nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
         elem_labels=elem_labels_p, node_labels=True,
         udl_loads=udl_loads_parsed)
-    st.pyplot(fig_welcome, use_container_width=True)
+    st.pyplot(fig_welcome, width="stretch")
     plt.close(fig_welcome)
     st.caption("Select a preset in the sidebar and click **🚀 Run DSM Analysis** to begin")
 
@@ -1014,20 +1014,20 @@ for i, (col, name) in enumerate(zip(tab_cols, STEP_NAMES)):
     with col:
         btn_type = "primary" if i == st.session_state.step else "secondary"
         if st.button(name.split("·")[0].strip(), key=f"tab_{i}",
-                     use_container_width=True, type=btn_type):
+                     width="stretch", type=btn_type):
             st.session_state.step = i
 
 st.progress((st.session_state.step) / (len(STEP_NAMES)-1))
 
 nav_c1, nav_mid, nav_c2 = st.columns([1, 6, 1])
 with nav_c1:
-    if st.button("◀ Prev", use_container_width=True) and st.session_state.step > 0:
+    if st.button("◀ Prev", width="stretch") and st.session_state.step > 0:
         st.session_state.step -= 1; st.rerun()
 with nav_mid:
     st.markdown(f"<h3 style='text-align:center;margin:0;'>{STEP_NAMES[st.session_state.step]}</h3>",
                 unsafe_allow_html=True)
 with nav_c2:
-    if st.button("Next ▶", use_container_width=True) and st.session_state.step < len(STEP_NAMES)-1:
+    if st.button("Next ▶", width="stretch") and st.session_state.step < len(STEP_NAMES)-1:
         st.session_state.step += 1; st.rerun()
 
 st.divider()
@@ -1049,7 +1049,7 @@ if step == 0:
     with col_v:
         fig0 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
                           elem_labels=elem_labels_p, udl_loads=udl_r)
-        st.pyplot(fig0, use_container_width=True)
+        st.pyplot(fig0, width="stretch")
         plt.close(fig0)
 
     with col_t:
@@ -1061,7 +1061,7 @@ if step == 0:
         st.markdown("**📍 Nodes**")
         st.dataframe(pd.DataFrame([{"ID":f"N{i+1}","x (m)":f"{x:.3f}","y (m)":f"{y:.3f}"}
                                     for i,(x,y) in enumerate(nodes_parsed)]),
-                     use_container_width=True, hide_index=True)
+                     width="stretch", hide_index=True)
 
         st.markdown("**🔗 Elements**")
         elem_rows = []
@@ -1070,12 +1070,12 @@ if step == 0:
             elem_rows.append({"ID":f"E{i+1}","Label":lbl,"Ni":f"N{e['ni']+1}",
                               "Nj":f"N{e['nj']+1}","L(m)":f"{e['L']:.3f}",
                               "α(°)":f"{e['alpha_deg']:.2f}","UDL":w_tag})
-        st.dataframe(pd.DataFrame(elem_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(elem_rows), width="stretch", hide_index=True)
 
         st.markdown("**⚙️ Material / Section**")
         st.dataframe(pd.DataFrame([{"E (kN/m²)":f"{E_val:.3e}","A (m²)":f"{A_val:.4f}",
                                     "I (m⁴)":f"{I_val:.6f}"}]),
-                     use_container_width=True, hide_index=True)
+                     width="stretch", hide_index=True)
 
         st.markdown("**➡️ Nodal Loads**")
         dof_names = {0:"Fx (kN)",1:"Fy (kN)",2:"M (kN·m)"}
@@ -1083,14 +1083,14 @@ if step == 0:
                  for nid,ldmap in nodal_loads_parsed.items()
                  for ld,val in ldmap.items()]
         st.dataframe(pd.DataFrame(lrows if lrows else [{"Note":"No nodal loads"}]),
-                     use_container_width=True, hide_index=True)
+                     width="stretch", hide_index=True)
 
         if udl_r:
             st.markdown("**〰️ UDL Summary**")
             udl_table = [{"Element":f"E{ei+1}","w (kN/m)":f"{w:+.3f}",
                           "Direction":"Local −y (↓)" if w < 0 else "Local +y (↑)"}
                          for ei,w in udl_r.items()]
-            st.dataframe(pd.DataFrame(udl_table), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(udl_table), width="stretch", hide_index=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -1101,7 +1101,7 @@ elif step == 1:
         fig1 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
                           U=res["U"], dof_map=res["dof_map"],
                           show_dofs=True, show_loads=False, udl_loads=udl_r)
-        st.pyplot(fig1, use_container_width=True)
+        st.pyplot(fig1, width="stretch")
         plt.close(fig1)
 
     with col_t:
@@ -1129,7 +1129,7 @@ Total DOFs = 3 × nNodes
             if val=="FREE":  return "background-color:#dcfce7;color:#166534"
             return ""
         st.dataframe(df_dofs.style.map(color_bc, subset=["u BC","v BC","θ BC"]),
-                     use_container_width=True, hide_index=True)
+                     width="stretch", hide_index=True)
         st.markdown(f"- Total DOFs: **{res['nDOF']}** | Fixed: **{len(res['fixed_global'])}** "
                     f"→ {res['fixed_global']} | Free: **{len(res['free_global'])}** "
                     f"→ {res['free_global']}")
@@ -1208,7 +1208,7 @@ c = cos(α),  s = sin(α),  α = angle from global +X
             xy=((ni2[0]+nj2[0])/2,(ni2[1]+nj2[1])/2),
             color="#7c3aed", fontsize=10, fontfamily="monospace",
             bbox=dict(boxstyle="round", fc="#ffffff", ec="#7c3aed"))
-        st.pyplot(fig3, use_container_width=True)
+        st.pyplot(fig3, width="stretch")
         plt.close(fig3)
 
 
@@ -1231,7 +1231,7 @@ elif step == 4:
                 caption=f"[K]ₑ for E{ei+1} mapped to global DOFs {e['gdofs']}")
     dm_rows = [{"Local DOF":f"u{e['ni']+1}/v{e['ni']+1}/θ{e['ni']+1}/u{e['nj']+1}/v{e['nj']+1}/θ{e['nj']+1}".split("/")[li],
                 "Global Index":g} for li,g in enumerate(e["gdofs"])]
-    st.dataframe(pd.DataFrame(dm_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(dm_rows), width="stretch", hide_index=True)
 
 
 # ── Step 5: Assembly ──────────────────────────────────────────────────────────
@@ -1267,7 +1267,7 @@ FEF_local = [ 0,  wL/2,  wL²/12,  0,  wL/2,  -wL²/12 ]
                 "Vj = wL/2": f"{fs['Vj']:.4f}",
                 "Mj = −wL²/12": f"{fs['Mj']:.4f}",
             })
-        st.dataframe(pd.DataFrame(fef_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(fef_rows), width="stretch", hide_index=True)
         st.caption("These FEF values were transformed to global coords and added to {F} before solving.")
         st.divider()
 
@@ -1324,7 +1324,7 @@ elif step == 7:
         fig7 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
                           U=res["U"], dof_map=res["dof_map"],
                           show_deformed=True, show_loads=True, udl_loads=udl_r)
-        st.pyplot(fig7, use_container_width=True)
+        st.pyplot(fig7, width="stretch")
         plt.close(fig7)
         st.caption("— Deformed shape (dashed red, exaggerated scale)")
 
@@ -1346,7 +1346,7 @@ elif step == 7:
             return ("background-color:#dcfce7;color:#166534" if val=="SOLVED"
                     else "background-color:#f1f5f9;color:#475569")
         st.dataframe(df_U.style.map(col_status, subset=["Status"]),
-                     use_container_width=True, hide_index=True)
+                     width="stretch", hide_index=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -1384,7 +1384,7 @@ This ensures M(0) = M_i and M(L) = M_j match the parabolic BMD exactly.
             "N_j (kN)":f"{mr['N_j']:.3f}","V_j (kN)":f"{mr['V_j']:.3f}",
             "M_j (kN·m)":f"{mr['M_j']:.3f}",
         })
-    st.dataframe(pd.DataFrame(force_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(force_rows), width="stretch", hide_index=True)
 
     # Detail view — show elastic, FEF, and corrected vectors side-by-side
     st.divider()
@@ -1415,7 +1415,7 @@ This ensures M(0) = M_i and M(L) = M_j match the parabolic BMD exactly.
     st.divider()
     fig_bmd = draw_bmd_sfd(nodes_parsed, elems_parsed, res["member_results"],
                            elem_labels_p, member_loads=udl_r)
-    st.pyplot(fig_bmd, use_container_width=True)
+    st.pyplot(fig_bmd, width="stretch")
     plt.close(fig_bmd)
 
     if udl_r:
@@ -1433,7 +1433,7 @@ elif step == 9:
                           U=res["U"], dof_map=res["dof_map"],
                           show_deformed=True, show_reactions=True,
                           reactions=res["reactions"], udl_loads=udl_r)
-        st.pyplot(fig9, use_container_width=True)
+        st.pyplot(fig9, width="stretch")
         plt.close(fig9)
 
     with col_t:
@@ -1461,7 +1461,7 @@ elif step == 9:
             nid = gi//3; ld = gi%3
             rx_rows.append({"Node":f"N{nid+1}","DOF":f"d{gi}",
                             "Type":dof_names_map[ld],"Reaction":f"{val:.4f}"})
-        st.dataframe(pd.DataFrame(rx_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rx_rows), width="stretch", hide_index=True)
 
         st.markdown("**⚖️ Global Equilibrium Check**")
         eq  = res["eq_check"]; tol = 1e-3
