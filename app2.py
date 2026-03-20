@@ -1,10 +1,10 @@
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║   2D Frame Analyzer — Direct Stiffness Method (DSM)             ║
-║   Glass-Box Educational Tool for B.Tech / M.Tech Students       ║
-║   Author  : Educational Structural Engineering Lab              ║
-║   Deploy  : streamlit run dsm_2d_frame.py                       ║
-║   Requires: streamlit, numpy, pandas, matplotlib                ║
+║   2D Frame Analyzer — Direct Stiffness Method (DSM)              ║
+║   Glass-Box Educational Tool for B.Tech / M.Tech Students        ║
+║   Author  : Educational Structural Engineering Lab               ║
+║   Deploy  : streamlit run dsm_2d_frame.py                        ║
+║   Requires: streamlit, numpy, pandas, matplotlib                 ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
 
@@ -448,9 +448,25 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
                     ax.text(x-arrowsc*0.6, y+dy, f"Ry={val:.1f}",
                             color="#dc2626", fontsize=7, ha="right", fontfamily="monospace")
 
-    ax.autoscale(enable=True, axis='both', tight=False)
-    ax.set_aspect('equal', adjustable='datalim')
-    ax.margins(0.15)  # Adds a 15% dynamic padding around all drawn elements
+    # Ensure standard box scaling first
+    ax.set_aspect('equal', adjustable='box')
+    
+    # Ask Matplotlib to compute the limits of EVERYTHING just plotted
+    ax.relim()
+    ax.autoscale_view()
+    
+    # Grab those absolute extremes
+    xmin, xmax = ax.get_xlim()
+    ymin, ymax = ax.get_ylim()
+    
+    # Calculate a uniform padding based on the largest dimension
+    max_span = max(xmax - xmin, ymax - ymin, 1.0)
+    margin = max_span * 0.15
+    
+    # Hard-set the limits with our guaranteed margin
+    ax.set_xlim(xmin - margin, xmax + margin)
+    ax.set_ylim(ymin - margin, ymax + margin)
+
     ax.grid(True, color="#e2e8f0", lw=0.5, alpha=0.8)
     ax.set_xlabel("X (m)", color="#475569", fontfamily="monospace")
     ax.set_ylabel("Y (m)", color="#475569", fontfamily="monospace")
@@ -576,9 +592,24 @@ def draw_bmd_sfd(nodes, elements, member_results, elem_labels=None, member_loads
             ax.text(xj + scale * vals[-1] * perp[0] * 1.1, yj + scale * vals[-1] * perp[1] * 1.1,
                     f"{val_end:.1f}", color=col, fontsize=7, ha="center", fontfamily="monospace")
 
-        ax.autoscale(enable=True, axis='both', tight=False)
-        ax.set_aspect('equal', adjustable='datalim')
-        ax.margins(0.15)
+        # Ensure standard box scaling first
+        ax.set_aspect('equal', adjustable='box')
+        
+        # Ask Matplotlib to compute the limits of EVERYTHING just plotted
+        ax.relim()
+        ax.autoscale_view()
+        
+        # Grab those absolute extremes
+        xmin, xmax = ax.get_xlim()
+        ymin, ymax = ax.get_ylim()
+        
+        # Calculate a uniform padding based on the largest dimension
+        max_span = max(xmax - xmin, ymax - ymin, 1.0)
+        margin = max_span * 0.15
+        
+        # Hard-set the limits with our guaranteed margin
+        ax.set_xlim(xmin - margin, xmax + margin)
+        ax.set_ylim(ymin - margin, ymax + margin)
 
     plt.tight_layout()
     return fig
@@ -756,7 +787,7 @@ if res is None:
     fig_welcome = draw_frame(
         nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
         elem_labels=elem_labels_p, node_labels=True)
-    st.pyplot(fig_welcome, width="stretch")
+    st.pyplot(fig_welcome, use_container_width=True)
     plt.close(fig_welcome) 
     st.caption("Select a preset in the sidebar and click **🚀 Run DSM Analysis** to begin")
 
@@ -795,7 +826,7 @@ Local stiffness (Euler-Bernoulli beam-column, 6×6):
        ┌  EA/L    0       0      -EA/L   0       0    ┐
        │   0    12EI/L³  6EI/L²   0   -12EI/L³  6EI/L² │
 [k] = │   0     6EI/L²  4EI/L    0    -6EI/L²  2EI/L  │
-       │ -EA/L   0       0       EA/L   0       0    │
+       │ -EA/L    0       0       EA/L   0       0    │
        │   0   -12EI/L³ -6EI/L²  0    12EI/L³ -6EI/L² │
        └   0     6EI/L²  2EI/L   0    -6EI/L²  4EI/L  ┘
 
@@ -953,7 +984,7 @@ Total DOFs = 3 × nNodes
 **Summary:**
 - Total DOFs: **{res['nDOF']}**
 - Fixed DOFs: **{len(res['fixed_global'])}** → {res['fixed_global']}
-- Free DOFs:  **{len(res['free_global'])}**  → {res['free_global']}
+- Free DOFs:  **{len(res['free_global'])}** → {res['free_global']}
 """)
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1023,7 +1054,7 @@ elif step == 3:
   α = angle of member axis measured from global +X axis
 
   [λ] = ⌈ c   s   0 ⌉       [T] = block-diagonal:  ⌈ [λ]   [0] ⌉
-        │-s   c   0 │                                ⌊ [0]   [λ] ⌋
+        │-s   c   0 │                              ⌊ [0]   [λ] ⌋
         ⌊ 0   0   1 ⌋
 
   Local coords = [T] × {u_global}       →   {u_loc} = [T]{u}
@@ -1159,7 +1190,7 @@ elif step == 6:
         show_vector(res["Ff"], labels=dof_lbls_f, caption="{Ff} — Reduced loads")
 
     st.markdown(f"""
-- **Full system:**   {res['nDOF']} × {res['nDOF']}  →  **Reduced system:** {nf} × {nf}
+- **Full system:** {res['nDOF']} × {res['nDOF']}  →  **Reduced system:** {nf} × {nf}
 - Eliminated DOFs: {res['fixed_global']}  (all prescribed = 0 in this problem)
 """)
 
@@ -1172,6 +1203,7 @@ elif step == 7:
                           U=res["U"], dof_map=res["dof_map"],
                           show_deformed=True, show_loads=True)
         st.pyplot(fig7, use_container_width=True)
+        plt.close(fig7)
         st.caption("— Deformed shape (dashed red, exaggerated scale)")
 
     with col_t:
@@ -1266,7 +1298,7 @@ elif step == 8:
     st.divider()
     fig_bmd = draw_bmd_sfd(nodes_parsed, elems_parsed, res["member_results"], elem_labels_p)
     st.pyplot(fig_bmd, use_container_width=True)
-    plt.close(fig_bmd) # <-- ADD THIS LINE
+    plt.close(fig_bmd)
 
 # ── Step 9: Reactions ─────────────────────────────────────────────────────────
 elif step == 9:
@@ -1277,6 +1309,7 @@ elif step == 9:
                           show_deformed=True, show_reactions=True,
                           reactions=res["reactions"])
         st.pyplot(fig9, use_container_width=True)
+        plt.close(fig9)
 
     with col_t:
         st.markdown("<div class='step-card'>", unsafe_allow_html=True)
@@ -1365,7 +1398,3 @@ with ref_c3:
 ```bash
 pip install streamlit numpy pandas matplotlib
 streamlit run dsm_2d_frame.py
-```
-Or push to GitHub and connect at  
-[share.streamlit.io](https://share.streamlit.io)
-""")
