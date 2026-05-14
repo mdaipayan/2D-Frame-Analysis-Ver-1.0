@@ -845,6 +845,43 @@ def draw_deflection_diagram(nodes, elements, member_results, scale=0.3, elem_lab
     return fig
 
 
+def draw_deflection_diagram(nodes, elements, member_results, scale=0.3, elem_labels=None):
+    """Draw a smooth plane-frame deflection diagram using beam shape functions."""
+    fig, ax = plt.subplots(figsize=(11, 7), facecolor="#f8fafc")
+    ax.set_facecolor("#ffffff")
+    xs = [n[0] for n in nodes]; ys = [n[1] for n in nodes]
+    span = max(max(xs)-min(xs), max(ys)-min(ys), 1.0)
+    max_disp = max(max(abs(mr["u_local"][i]) for i in [0, 1, 3, 4]) for mr in member_results) or 1.0
+    sc = scale * span / max(max_disp, 1e-12)
+    for idx, ((ni, nj), mr) in enumerate(zip(elements, member_results)):
+        xi, yi = nodes[ni]; xj, yj = nodes[nj]
+        L = max(math.hypot(xj-xi, yj-yi), 1e-9)
+        alpha = math.atan2(yj-yi, xj-xi)
+        c, s = math.cos(alpha), math.sin(alpha)
+        base_x = [xi + t*(xj-xi) for t in np.linspace(0, 1, 30)]
+        base_y = [yi + t*(yj-yi) for t in np.linspace(0, 1, 30)]
+        ax.plot(base_x, base_y, color="#94a3b8", lw=1.2)
+        dxs, dys = [], []
+        for xloc in np.linspace(0, L, 50):
+            u, v = _local_deflection_at(float(xloc), L, mr["u_local"])
+            gx = xi + (xloc/L)*(xj-xi) + sc*(c*u - s*v)
+            gy = yi + (xloc/L)*(yj-yi) + sc*(s*u + c*v)
+            dxs.append(gx); dys.append(gy)
+        ax.plot(dxs, dys, color="#dc2626", lw=2.4)
+        if elem_labels:
+            ax.text((xi+xj)/2, (yi+yj)/2, elem_labels[idx], color="#475569",
+                    fontsize=8, ha="center", fontfamily="monospace")
+    ax.scatter(xs, ys, s=45, color="#1e293b", zorder=3)
+    ax.set_title("Deflection Diagram (smooth, exaggerated)", color="#1e40af", fontfamily="monospace")
+    ax.grid(True, color="#e2e8f0", lw=0.5)
+    ax.set_aspect("equal")
+    margin = span * 0.25
+    ax.set_xlim(min(xs)-margin, max(xs)+margin)
+    ax.set_ylim(min(ys)-margin, max(ys)+margin)
+    plt.tight_layout()
+    return fig
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  SESSION STATE
 # ══════════════════════════════════════════════════════════════════════════════
