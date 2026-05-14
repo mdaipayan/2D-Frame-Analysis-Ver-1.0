@@ -96,8 +96,114 @@ PRESETS = {
         "member_loads": {1: 12.0, 2: 12.0},
         "labels": ["Left Col","Left Rafter","Right Rafter","Right Col"],
     },
+    "Plane Frame (Custom UDL + Point Load)": {
+        "desc": "Professional plane-frame example with partial-span UDL and member point load",
+        "nodes": [(0,0),(0,4),(5,4),(9,4),(9,0)],
+        "elements": [(0,1),(1,2),(2,3),(3,4)],
+        "fixed_dofs": {0:[0,1,2], 4:[0,1,2]},
+        "E": 200e6, "A": 0.012, "I": 1.2e-4,
+        "nodal_loads": {1:{0:12.0}},
+        "member_loads": [
+            {"element": 1, "type": "UDL", "w": 18.0, "a": 1.0, "b": 4.0},
+            {"element": 2, "type": "Point", "P": 35.0, "x": 2.0},
+        ],
+        "labels": ["Left Column","Beam A","Beam B","Right Column"],
+    },
 }
 
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MEMBER LOAD HELPERS — plane-frame equivalent nodal loads
+# ══════════════════════════════════════════════════════════════════════════════
+def _clean_load_type(load_type):
+    text = str(load_type or "UDL").strip().lower()
+    if text.startswith("point") or text in {"pl", "p"}:
+        return "Point"
+    return "UDL"
+
+
+def normalize_member_loads(member_loads, elem_lengths=None):
+    """Return a list of standard member-load specs.
+
+    Supports the legacy `{element_id: w_down}` dict as full-span UDLs and the
+    newer list-of-dicts format with custom UDL spans and point-load positions.
+    Positive load values act downward in the member's local transverse direction.
+    """
+    specs = []
+    if member_loads is None:
+        return specs
+    if isinstance(member_loads, dict):
+        for eid, w in member_loads.items():
+            if abs(float(w)) > 1e-12:
+                L = elem_lengths[eid] if elem_lengths and eid < len(elem_lengths) else None
+                specs.append({"element": int(eid), "type": "UDL", "w": float(w),
+                              "a": 0.0, "b": L, "P": 0.0, "x": 0.0})
+        return specs
+    for row in member_loads:
+        if not row:
+            continue
+        eid = int(row.get("element", row.get("Element", 0)))
+        load_type = _clean_load_type(row.get("type", row.get("Type", "UDL")))
+        L = elem_lengths[eid] if elem_lengths and 0 <= eid < len(elem_lengths) else None
+        if load_type == "Point":
+            P = float(row.get("P", row.get("Load", row.get("load", 0.0))))
+            x = float(row.get("x", row.get("Position", row.get("position", 0.0))))
+            if abs(P) > 1e-12:
+                specs.append({"element": eid, "type": "Point", "P": P, "x": x,
+                              "a": x, "b": x, "w": 0.0})
+        else:
+            w = float(row.get("w", row.get("Load", row.get("load", 0.0))))
+            a = float(row.get("a", row.get("Start", row.get("start", 0.0))))
+            raw_b = row.get("b", row.get("End", row.get("end", L)))
+            b = L if raw_b is None or str(raw_b).strip() == "" else float(raw_b)
+            if abs(w) > 1e-12:
+                specs.append({"element": eid, "type": "UDL", "w": w,
+                              "a": a, "b": b, "P": 0.0, "x": 0.0})
+    return specs
+
+
+def _beam_shape_functions(x, L):
+    xi = x / L
+    return np.array([
+        1 - 3*xi**2 + 2*xi**3,
+        L * (xi - 2*xi**2 + xi**3),
+        3*xi**2 - 2*xi**3,
+        L * (-xi**2 + xi**3),
+    ])
+
+
+def equivalent_member_load_vector(load_specs, L):
+    """Consistent local nodal load vector for transverse UDL/point loads."""
+    p_local = np.zeros(6)
+    applied = []
+    for spec in load_specs:
+        ltype = _clean_load_type(spec.get("type"))
+        if ltype == "UDL":
+            w = float(spec.get("w", 0.0))
+            a = max(0.0, min(L, float(spec.get("a", 0.0))))
+            b = max(0.0, min(L, float(spec.get("b", L))))
+            if b < a:
+                a, b = b, a
+            if b - a <= 1e-12 or abs(w) <= 1e-12:
+                continue
+            pts, weights = np.polynomial.legendre.leggauss(8)
+            xs = 0.5*(b-a)*pts + 0.5*(a+b)
+            ws = 0.5*(b-a)*weights
+            q = -w  # positive UI value = downward local transverse load
+            for x, wt in zip(xs, ws):
+                N1, N2, N3, N4 = _beam_shape_functions(float(x), L)
+                p_local[[1, 2, 4, 5]] += wt * q * np.array([N1, N2, N3, N4])
+            applied.append({"type": "UDL", "w": w, "a": a, "b": b})
+        else:
+            P = float(spec.get("P", 0.0))
+            x = max(0.0, min(L, float(spec.get("x", 0.0))))
+            if abs(P) <= 1e-12:
+                continue
+            N1, N2, N3, N4 = _beam_shape_functions(x, L)
+            p_local[[1, 2, 4, 5]] += -P * np.array([N1, N2, N3, N4])
+            applied.append({"type": "Point", "P": P, "x": x})
+    return p_local, applied
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  DSM SOLVER — returns full step-by-step data
@@ -110,7 +216,7 @@ def run_dsm(nodes, elements, fixed_dofs, nodal_loads, member_loads, E, A, I):
     elements     : list of (ni, nj) node-index pairs
     fixed_dofs   : dict {node_id: [local_dof_indices]}  — 0=u,1=v,2=θ
     nodal_loads  : dict {node_id: {local_dof: value}}  — kN or kN·m
-    member_loads : dict {element_id: w_down} — uniform transverse gravity load in kN/m
+    member_loads : list/dict — UDL or point member loads in local transverse direction
     E, A, I      : material / section (kN/m² , m², m⁴)
 
     Returns a dict with all intermediate matrices for each step.
@@ -172,7 +278,7 @@ def run_dsm(nodes, elements, fixed_dofs, nodal_loads, member_loads, E, A, I):
             "gdofs": gdofs,
             "p_local": np.zeros(6),
             "p_global": np.zeros(6),
-            "w_down": 0.0,
+            "member_load_specs": [],
         })
 
     # ── Step 5: Assemble global K and F ─────────────────────
@@ -181,19 +287,20 @@ def run_dsm(nodes, elements, fixed_dofs, nodal_loads, member_loads, E, A, I):
     F_nodal = np.zeros(nDOF)
     F_member = np.zeros(nDOF)
 
+    elem_lengths = [ed["L"] for ed in elem_data]
+    normalized_loads = normalize_member_loads(member_loads, elem_lengths)
+    loads_by_element = {i: [] for i in range(ne)}
+    for spec in normalized_loads:
+        if 0 <= spec["element"] < ne:
+            loads_by_element[spec["element"]].append(spec)
+
     for idx, ed in enumerate(elem_data):
         gdofs = ed["gdofs"]
-        w_down = float(member_loads.get(idx, 0.0))
-        if abs(w_down) > 1e-12:
-            L = ed["L"]
-            # Consistent equivalent nodal load vector for a uniform load acting
-            # downward in the element local y direction. Positive w_down = gravity.
-            p_local = np.array([0.0, -w_down*L/2, -w_down*L**2/12,
-                                0.0, -w_down*L/2,  w_down*L**2/12])
-            p_global = ed["T6"].T @ p_local
+        p_local, applied_specs = equivalent_member_load_vector(loads_by_element.get(idx, []), ed["L"])
+        if applied_specs:
             ed["p_local"] = p_local
-            ed["p_global"] = p_global
-            ed["w_down"] = w_down
+            ed["p_global"] = ed["T6"].T @ p_local
+            ed["member_load_specs"] = applied_specs
         for r, gr in enumerate(gdofs):
             F_member[gr] += ed["p_global"][r]
             for c2, gc in enumerate(gdofs):
@@ -237,7 +344,7 @@ def run_dsm(nodes, elements, fixed_dofs, nodal_loads, member_loads, E, A, I):
             "u_local":  u_loc,
             "f_local":  f_loc,
             "p_local":  ed["p_local"],
-            "w_down":   ed["w_down"],
+            "member_load_specs": ed["member_load_specs"],
             # Force member exerts ON joint = negative of internal force vector
             "N_i": -f_loc[0], "V_i": -f_loc[1], "M_i": -f_loc[2],
             "N_j": -f_loc[3], "V_j": -f_loc[4], "M_j": -f_loc[5],
@@ -278,6 +385,7 @@ def run_dsm(nodes, elements, fixed_dofs, nodal_loads, member_loads, E, A, I):
         "Kff": Kff, "Ff": Ff,
         "U": U,
         "member_results": member_results,
+        "member_load_specs": normalized_loads,
         "reactions": reactions,
         "eq_check": eq_check,
     }
@@ -423,26 +531,43 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads, member_loads=None,
 
     # ── Draw loads ────────────────────────────────────────────
     if show_loads:
-        member_loads = member_loads or {}
+        lengths = [max(math.hypot(nodes[nj][0]-nodes[ni][0], nodes[nj][1]-nodes[ni][1]), 1e-9)
+                   for ni, nj in elements]
+        specs_by_element = {i: [] for i in range(len(elements))}
+        for spec in normalize_member_loads(member_loads, lengths):
+            if 0 <= spec["element"] < len(elements):
+                specs_by_element[spec["element"]].append(spec)
         for idx, (ni, nj) in enumerate(elements):
-            w = float(member_loads.get(idx, 0.0))
-            if abs(w) < 1e-10:
-                continue
             xi, yi = nodes[ni]; xj, yj = nodes[nj]
-            L = max(math.hypot(xj-xi, yj-yi), 1e-9)
+            L = lengths[idx]
             alpha = math.atan2(yj-yi, xj-xi)
-            # Downward local transverse load direction for positive w.
+            # Downward local transverse load direction for positive loads.
             nx, ny = math.sin(alpha), -math.cos(alpha)
-            n_arrows = max(3, min(8, int(L / max(span, 1e-9) * 8) + 2))
-            for k in range(1, n_arrows + 1):
-                t = k / (n_arrows + 1)
-                x = xi + t*(xj-xi); y = yi + t*(yj-yi)
-                ax.annotate("", xy=(x, y), xytext=(x - nx*arrowsc*0.75, y - ny*arrowsc*0.75),
-                            arrowprops=dict(arrowstyle="->", color="#ea580c", lw=1.4, alpha=0.8))
-            ax.text((xi+xj)/2 + nx*arrowsc*0.35, (yi+yj)/2 + ny*arrowsc*0.35,
-                    f"w={w:.2g} kN/m", color="#ea580c", fontsize=8,
-                    ha="center", fontfamily="monospace",
-                    bbox=dict(boxstyle="round,pad=0.2", fc="#fff7ed", ec="#fdba74", lw=0.8))
+            for spec in specs_by_element.get(idx, []):
+                if spec["type"] == "UDL":
+                    w = spec["w"]
+                    a, b = spec["a"], spec["b"]
+                    n_arrows = max(2, min(8, int((b-a) / max(L, 1e-9) * 8) + 1))
+                    for k in range(1, n_arrows + 1):
+                        xloc = a + (b-a) * k / (n_arrows + 1)
+                        t = xloc / L
+                        x = xi + t*(xj-xi); y = yi + t*(yj-yi)
+                        ax.annotate("", xy=(x, y), xytext=(x - nx*arrowsc*0.75, y - ny*arrowsc*0.75),
+                                    arrowprops=dict(arrowstyle="->", color="#ea580c", lw=1.4, alpha=0.8))
+                    tm = ((a+b)/2) / L
+                    ax.text(xi + tm*(xj-xi) + nx*arrowsc*0.35, yi + tm*(yj-yi) + ny*arrowsc*0.35,
+                            f"w={w:.2g} kN/m", color="#ea580c", fontsize=8,
+                            ha="center", fontfamily="monospace",
+                            bbox=dict(boxstyle="round,pad=0.2", fc="#fff7ed", ec="#fdba74", lw=0.8))
+                else:
+                    P, xloc = spec["P"], spec["x"]
+                    t = xloc / L
+                    x = xi + t*(xj-xi); y = yi + t*(yj-yi)
+                    ax.annotate("", xy=(x, y), xytext=(x - nx*arrowsc, y - ny*arrowsc),
+                                arrowprops=dict(arrowstyle="-|>", color="#b45309", lw=2.2))
+                    ax.text(x + nx*arrowsc*0.45, y + ny*arrowsc*0.45, f"P={P:.2g} kN",
+                            color="#b45309", fontsize=8, ha="center", fontfamily="monospace",
+                            bbox=dict(boxstyle="round,pad=0.2", fc="#fffbeb", ec="#f59e0b", lw=0.8))
 
         for nid, ldmap in nodal_loads.items():
             x, y = nodes[nid]
@@ -506,12 +631,49 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads, member_loads=None,
     return fig
 
 
+def _member_diagram_values(x, L, mr, load_specs):
+    """Sample local shear/moment from left-end forces and member loads."""
+    V = mr["V_i"]
+    M = mr["M_i"] + mr["V_i"] * x
+    for spec in load_specs:
+        if spec["type"] == "UDL":
+            w, a, b = spec["w"], spec["a"], spec["b"]
+            covered = max(0.0, min(x, b) - a)
+            if covered > 0:
+                V -= w * covered
+                M -= w * covered * (x - (a + covered/2))
+        else:
+            P, xp = spec["P"], spec["x"]
+            if x >= xp:
+                V -= P
+                M -= P * (x - xp)
+    return V, M
+
+
+def _local_deflection_at(x, L, u_local):
+    xi = x / L
+    Nu_i = 1 - xi
+    Nu_j = xi
+    N1, N2, N3, N4 = _beam_shape_functions(x, L)
+    u = Nu_i*u_local[0] + Nu_j*u_local[3]
+    v = N1*u_local[1] + N2*u_local[2] + N3*u_local[4] + N4*u_local[5]
+    return u, v
+
+
 def draw_bmd_sfd(nodes, elements, member_results, elem_labels=None, member_loads=None):
-    """Draw Bending Moment and Shear Force diagrams."""
+    """Draw improved bending-moment and shear-force diagrams with point/partial UDL loads."""
     fig, axes = plt.subplots(1, 2, figsize=(14, 6), facecolor="#f8fafc")
     titles = ["Bending Moment Diagram (kN·m)", "Shear Force Diagram (kN)"]
     colors = ["#7c3aed", "#0891b2"]
-    member_loads = member_loads or {}
+    lengths = [max(math.hypot(nodes[nj][0]-nodes[ni][0], nodes[nj][1]-nodes[ni][1]), 1e-9)
+               for ni, nj in elements]
+    specs_by_element = {i: [] for i in range(len(elements))}
+    for spec in normalize_member_loads(member_loads, lengths):
+        if 0 <= spec["element"] < len(elements):
+            specs_by_element[spec["element"]].append(spec)
+
+    xs = [n[0] for n in nodes]; ys = [n[1] for n in nodes]
+    span = max(max(xs)-min(xs), max(ys)-min(ys), 1.0)
 
     for ax_idx, ax in enumerate(axes):
         ax.set_facecolor("#ffffff")
@@ -521,66 +683,88 @@ def draw_bmd_sfd(nodes, elements, member_results, elem_labels=None, member_loads
         ax.set_title(titles[ax_idx], color="#1e40af", fontfamily="monospace", pad=10)
         ax.grid(True, color="#e2e8f0", lw=0.5)
 
-        xs = [n[0] for n in nodes]; ys = [n[1] for n in nodes]
-        span = max(max(xs)-min(xs), max(ys)-min(ys), 1.0)
-
-        # Draw element skeleton
         for ni, nj in elements:
             ax.plot([nodes[ni][0], nodes[nj][0]], [nodes[ni][1], nodes[nj][1]],
                     color="#94a3b8", lw=1, zorder=1)
 
         for idx, ((ni, nj), mr) in enumerate(zip(elements, member_results)):
             xi, yi = nodes[ni]; xj, yj = nodes[nj]
-            L = math.hypot(xj-xi, yj-yi)
+            L = lengths[idx]
             alpha = math.atan2(yj-yi, xj-xi)
-            c, s  = math.cos(alpha), math.sin(alpha)
-            perp  = (-s, c)
+            perp = (-math.sin(alpha), math.cos(alpha))
+            load_specs = specs_by_element.get(idx, mr.get("member_load_specs", []))
+            sample_x = sorted(set([0.0, L] +
+                                  [k*L/80 for k in range(81)] +
+                                  [s["a"] for s in load_specs if s["type"] == "UDL"] +
+                                  [s["b"] for s in load_specs if s["type"] == "UDL"] +
+                                  [s["x"] for s in load_specs if s["type"] == "Point"]))
+            values = []
+            for xloc in sample_x:
+                V, M = _member_diagram_values(xloc, L, mr, load_specs)
+                values.append(M if ax_idx == 0 else V)
+            scale = span * 0.16 / max(max(abs(v) for v in values), 1)
+            pts_x, pts_y, base_x, base_y = [], [], [], []
+            for xloc, val in zip(sample_x, values):
+                t = xloc / L
+                bx = xi + t*(xj-xi); by = yi + t*(yj-yi)
+                base_x.append(bx); base_y.append(by)
+                pts_x.append(bx + scale*val*perp[0]); pts_y.append(by + scale*val*perp[1])
 
-            w = float(member_loads.get(idx, mr.get("w_down", 0.0)))
-            if ax_idx == 0:  # BMD: end moments plus parabolic UDL contribution
-                Mi = mr["M_i"]; Mj = mr["M_j"]
-                diagram_value = lambda t: Mi*(1-t) + Mj*t + w*L**2*t*(1-t)/2
-            else:             # SFD: linear variation for UDL, end-result envelope
-                Mi = mr["V_i"]; Mj = mr["V_j"]
-                diagram_value = lambda t: Mi*(1-t) + Mj*t
-
-            n_pts = 40
-            values = [diagram_value(k / n_pts) for k in range(n_pts + 1)]
-            scale = span * 0.15 / max(max(abs(v) for v in values), 1)
-            pts_x, pts_y = [], []
-            for k, val in enumerate(values):
-                t = k / n_pts
-                px = xi + t*(xj-xi) + scale*val*perp[0]
-                py = yi + t*(yj-yi) + scale*val*perp[1]
-                pts_x.append(px); pts_y.append(py)
-
-            col = colors[idx % len(colors)]
-            # Baseline
-            ax.plot([xi, xj], [yi, yj], color="#94a3b8", lw=1)
-            # Filled BMD/SFD
-            bx = [xi + t*(xj-xi) for t in [k/n_pts for k in range(n_pts+1)]]
-            by = [yi + t*(yj-yi) for t in [k/n_pts for k in range(n_pts+1)]]
-            ax.fill(bx+pts_x[::-1], by+pts_y[::-1], color=col, alpha=0.25)
+            col = colors[ax_idx]
+            ax.fill(base_x + pts_x[::-1], base_y + pts_y[::-1], color=col, alpha=0.22)
             ax.plot(pts_x, pts_y, color=col, lw=2)
-
-            # Labels at ends
-            ax.text(xi + scale*Mi*perp[0]*1.1, yi + scale*Mi*perp[1]*1.1,
-                    f"{Mi:.1f}", color=col, fontsize=7, ha="center", fontfamily="monospace")
-            ax.text(xj + scale*Mj*perp[0]*1.1, yj + scale*Mj*perp[1]*1.1,
-                    f"{Mj:.1f}", color=col, fontsize=7, ha="center", fontfamily="monospace")
-            if ax_idx == 0 and abs(w) > 1e-10:
-                tm = 0.5
-                vm = diagram_value(tm)
-                ax.text((xi+xj)/2 + scale*vm*perp[0]*1.15,
-                        (yi+yj)/2 + scale*vm*perp[1]*1.15,
-                        f"mid {vm:.1f}", color=col, fontsize=7,
-                        ha="center", fontfamily="monospace")
+            for xloc, val in [(sample_x[0], values[0]), (sample_x[-1], values[-1]),
+                              (sample_x[int(np.argmax(np.abs(values)))], values[int(np.argmax(np.abs(values)))])]:
+                t = xloc / L
+                bx = xi + t*(xj-xi); by = yi + t*(yj-yi)
+                ax.text(bx + scale*val*perp[0]*1.12, by + scale*val*perp[1]*1.12,
+                        f"{val:.1f}", color=col, fontsize=7, ha="center", fontfamily="monospace")
+            if elem_labels:
+                ax.text((xi+xj)/2, (yi+yj)/2, elem_labels[idx], color="#475569",
+                        fontsize=7, ha="center", va="bottom", fontfamily="monospace")
 
         ax.set_aspect("equal")
         margin = span * 0.25
         ax.set_xlim(min(xs)-margin, max(xs)+margin)
         ax.set_ylim(min(ys)-margin, max(ys)+margin)
 
+    plt.tight_layout()
+    return fig
+
+
+def draw_deflection_diagram(nodes, elements, member_results, scale=0.3, elem_labels=None):
+    """Draw a smooth plane-frame deflection diagram using beam shape functions."""
+    fig, ax = plt.subplots(figsize=(11, 7), facecolor="#f8fafc")
+    ax.set_facecolor("#ffffff")
+    xs = [n[0] for n in nodes]; ys = [n[1] for n in nodes]
+    span = max(max(xs)-min(xs), max(ys)-min(ys), 1.0)
+    max_disp = max(max(abs(mr["u_local"][i]) for i in [0, 1, 3, 4]) for mr in member_results) or 1.0
+    sc = scale * span / max(max_disp, 1e-12)
+    for idx, ((ni, nj), mr) in enumerate(zip(elements, member_results)):
+        xi, yi = nodes[ni]; xj, yj = nodes[nj]
+        L = max(math.hypot(xj-xi, yj-yi), 1e-9)
+        alpha = math.atan2(yj-yi, xj-xi)
+        c, s = math.cos(alpha), math.sin(alpha)
+        base_x = [xi + t*(xj-xi) for t in np.linspace(0, 1, 30)]
+        base_y = [yi + t*(yj-yi) for t in np.linspace(0, 1, 30)]
+        ax.plot(base_x, base_y, color="#94a3b8", lw=1.2)
+        dxs, dys = [], []
+        for xloc in np.linspace(0, L, 50):
+            u, v = _local_deflection_at(float(xloc), L, mr["u_local"])
+            gx = xi + (xloc/L)*(xj-xi) + sc*(c*u - s*v)
+            gy = yi + (xloc/L)*(yj-yi) + sc*(s*u + c*v)
+            dxs.append(gx); dys.append(gy)
+        ax.plot(dxs, dys, color="#dc2626", lw=2.4)
+        if elem_labels:
+            ax.text((xi+xj)/2, (yi+yj)/2, elem_labels[idx], color="#475569",
+                    fontsize=8, ha="center", fontfamily="monospace")
+    ax.scatter(xs, ys, s=45, color="#1e293b", zorder=3)
+    ax.set_title("Deflection Diagram (smooth, exaggerated)", color="#1e40af", fontfamily="monospace")
+    ax.grid(True, color="#e2e8f0", lw=0.5)
+    ax.set_aspect("equal")
+    margin = span * 0.25
+    ax.set_xlim(min(xs)-margin, max(xs)+margin)
+    ax.set_ylim(min(ys)-margin, max(ys)+margin)
     plt.tight_layout()
     return fig
 
@@ -614,6 +798,8 @@ with st.sidebar:
 
     P = PRESETS[chosen]
     st.info(P["desc"])
+    st.markdown("### 🧭 Analysis Mode")
+    st.success("Plane Frame (2D beam-column): axial, shear, bending, rotations, reactions, SFD/BMD, and deflection diagrams")
 
     st.divider()
     st.markdown("### ⚙️ Material & Section")
@@ -669,15 +855,28 @@ with st.sidebar:
                               key=f"loads_{chosen}")
 
     st.divider()
-    st.markdown("### ⏬ Member UDLs")
-    st.caption("Uniform transverse load in each element's local downward direction. Positive = gravity/downward (kN/m).")
-    member_rows = [
-        {"Element": f"E{eid+1}", "w↓ (kN/m)": val}
-        for eid, val in P.get("member_loads", {}).items()
-    ]
-    udl_df = pd.DataFrame(member_rows if member_rows else [{"Element": "E1", "w↓ (kN/m)": 0.0}])
-    udl_df = st.data_editor(udl_df, num_rows="dynamic", width="stretch",
-                             key=f"udls_{chosen}")
+    st.markdown("### ⏬ Standard Member Loads")
+    st.caption("Plane-frame member loads in local transverse direction. UDL supports custom start/end spans; point loads use position x from node i. Positive = downward.")
+    preset_lengths = [math.hypot(P["nodes"][nj][0]-P["nodes"][ni][0], P["nodes"][nj][1]-P["nodes"][ni][1])
+                      for ni, nj in P["elements"]]
+    member_rows = []
+    for spec in normalize_member_loads(P.get("member_loads", []), preset_lengths):
+        if spec["type"] == "Point":
+            member_rows.append({"Element": f"E{spec['element']+1}", "Type": "Point", "Load ↓": spec["P"],
+                                "Start x": "", "End x": "", "Position x": spec["x"]})
+        else:
+            member_rows.append({"Element": f"E{spec['element']+1}", "Type": "UDL", "Load ↓": spec["w"],
+                                "Start x": spec["a"], "End x": spec["b"], "Position x": ""})
+    load_spec_df = pd.DataFrame(member_rows if member_rows else [
+        {"Element": "E1", "Type": "UDL", "Load ↓": 0.0, "Start x": 0.0, "End x": "", "Position x": ""}
+    ])
+    load_spec_df = st.data_editor(
+        load_spec_df, num_rows="dynamic", width="stretch", key=f"member_loads_{chosen}",
+        column_config={
+            "Type": st.column_config.SelectboxColumn("Type", options=["UDL", "Point"]),
+            "Load ↓": st.column_config.NumberColumn("Load ↓", help="UDL in kN/m or point load in kN"),
+        },
+    )
 
     st.divider()
     st.markdown("### ✅ Quality Controls")
@@ -692,9 +891,15 @@ def _is_valid_row(r, keys):
     """Return True only if all required keys have non-None, non-empty values."""
     for k in keys:
         v = r.get(k)
-        if v is None or str(v).strip() in ("", "None"):
+        if v is None or pd.isna(v) or str(v).strip() in ("", "None", "nan"):
             return False
     return True
+
+
+def _optional_float(value, default=0.0):
+    if value is None or pd.isna(value) or str(value).strip() in ("", "None", "nan"):
+        return default
+    return float(value)
 
 nodes_parsed = [
     (float(r["x (m)"]), float(r["y (m)"]))
@@ -720,16 +925,26 @@ for _, r in load_df.iterrows():
     if abs(val) > 1e-10:
         nodal_loads_parsed.setdefault(nid, {})[ld] = val
 
-member_loads_parsed = {}
-for _, r in udl_df.iterrows():
-    if not _is_valid_row(r, ["Element", "w↓ (kN/m)"]):
+member_loads_parsed = []
+for _, r in load_spec_df.iterrows():
+    if not _is_valid_row(r, ["Element", "Type", "Load ↓"]):
         continue
     raw_elem = str(r["Element"]).strip().upper().replace("E", "")
-    if raw_elem:
-        eid = int(float(raw_elem)) - 1
-        val = float(r["w↓ (kN/m)"])
-        if abs(val) > 1e-10:
-            member_loads_parsed[eid] = val
+    if not raw_elem:
+        continue
+    eid = int(float(raw_elem)) - 1
+    load_type = _clean_load_type(r["Type"])
+    load_value = float(r["Load ↓"])
+    if abs(load_value) <= 1e-10:
+        continue
+    if load_type == "Point":
+        x = _optional_float(r.get("Position x"), 0.0)
+        member_loads_parsed.append({"element": eid, "type": "Point", "P": load_value, "x": x})
+    else:
+        a = _optional_float(r.get("Start x"), 0.0)
+        raw_b = r.get("End x")
+        member_loads_parsed.append({"element": eid, "type": "UDL", "w": load_value,
+                                    "a": a, "b": None if raw_b is None or pd.isna(raw_b) or str(raw_b).strip() == "" else float(raw_b)})
 
 if run_btn:
     if len(nodes_parsed) < 2:
@@ -755,7 +970,22 @@ if run_btn:
                 if key in seen:
                     duplicate.append(i)
                 seen.add(key)
-        bad_udl = [eid for eid in member_loads_parsed if eid < 0 or eid >= len(elems_parsed)]
+        bad_udl = []
+        bad_span = []
+        elem_lengths = [math.hypot(nodes_parsed[nj][0]-nodes_parsed[ni][0], nodes_parsed[nj][1]-nodes_parsed[ni][1])
+                        for ni, nj in elems_parsed]
+        for spec in member_loads_parsed:
+            eid = spec["element"]
+            if eid < 0 or eid >= len(elems_parsed):
+                bad_udl.append(eid)
+                continue
+            L = elem_lengths[eid]
+            if spec["type"] == "UDL":
+                b = L if spec.get("b") is None else spec["b"]
+                if spec["a"] < 0 or b > L or b <= spec["a"]:
+                    bad_span.append(f"E{eid+1} UDL span must satisfy 0 ≤ start < end ≤ {L:.3f} m")
+            elif spec["x"] < 0 or spec["x"] > L:
+                bad_span.append(f"E{eid+1} point-load position must satisfy 0 ≤ x ≤ {L:.3f} m")
         bad_loads = [(nid, ld) for nid, ldm in nodal_loads_parsed.items() for ld in ldm if nid < 0 or nid > max_node or ld not in (0, 1, 2)]
         if bad:
             for i, ni, nj in bad:
@@ -768,7 +998,11 @@ if run_btn:
         if duplicate:
             st.warning("⚠️ Duplicate connectivity detected for: " + ", ".join(f"E{i+1}" for i in duplicate))
         if bad_udl:
-            st.error("🚨 UDL references invalid element(s): " + ", ".join(f"E{i+1}" for i in bad_udl))
+            st.error("🚨 Member load references invalid element(s): " + ", ".join(f"E{i+1}" for i in bad_udl))
+            st.stop()
+        if bad_span:
+            for msg in bad_span:
+                st.error(f"🚨 {msg}")
             st.stop()
         if bad_loads:
             st.error("🚨 Nodal load references invalid node or DOF. Valid DOFs are 0=u, 1=v, 2=θ.")
@@ -791,10 +1025,10 @@ if run_btn:
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown("""
 <h1 style='text-align:center; font-family:Courier New; color:#1e40af; letter-spacing:2px;'>
-  🏗️ 2D FRAME ANALYZER — DIRECT STIFFNESS METHOD
+  🏗️ 2D / PLANE FRAME ANALYZER — DIRECT STIFFNESS METHOD
 </h1>
 <p style='text-align:center; color:#475569; font-family:Courier New; font-size:14px;'>
-  Glass-Box Educational Tool &nbsp;|&nbsp; B.Tech / M.Tech Structural Analysis
+  Professional Plane-Frame Analysis &nbsp;|&nbsp; DSM Glass-Box Educational Tool
 </p>
 """, unsafe_allow_html=True)
 st.divider()
@@ -950,8 +1184,13 @@ if step == 0:
         lrows = [{"Source":"Node", "ID":f"N{nid+1}", "Load":dof_names[ld], "Value":f"{val:.1f}"}
                  for nid, ldmap in nodal_loads_parsed.items()
                  for ld, val in ldmap.items()]
-        lrows += [{"Source":"Member UDL", "ID":f"E{eid+1}", "Load":"w↓ (kN/m)", "Value":f"{val:.2f}"}
-                  for eid, val in member_loads_parsed.items()]
+        for spec in normalize_member_loads(member_loads_parsed, [e["L"] for e in ed]):
+            if spec["type"] == "Point":
+                lrows.append({"Source":"Member Point", "ID":f"E{spec['element']+1}",
+                              "Load":f"P↓ at x={spec['x']:.3f} m", "Value":f"{spec['P']:.2f} kN"})
+            else:
+                lrows.append({"Source":"Member UDL", "ID":f"E{spec['element']+1}",
+                              "Load":f"w↓ from {spec['a']:.3f}–{spec['b']:.3f} m", "Value":f"{spec['w']:.2f} kN/m"})
         st.dataframe(pd.DataFrame(lrows if lrows else [{"Note":"No applied loads"}]),
                      width="stretch", hide_index=True)
         st.markdown("</div>", unsafe_allow_html=True)
@@ -1224,7 +1463,11 @@ elif step == 7:
                           member_loads=member_loads_parsed, U=res["U"], dof_map=res["dof_map"],
                           show_deformed=True, show_loads=True)
         st.pyplot(fig7, width="stretch")
-        st.caption("— Deformed shape (dashed red, exaggerated scale)")
+        st.caption("— Nodal deformed shape (dashed red, exaggerated scale)")
+        fig_def = draw_deflection_diagram(nodes_parsed, elems_parsed, res["member_results"], elem_labels=elem_labels_p)
+        st.pyplot(fig_def, width="stretch")
+        plt.close(fig_def)
+        st.caption("— Smooth member deflection diagram using plane-frame interpolation functions")
 
     with col_t:
         st.markdown("<div class='step-card'>", unsafe_allow_html=True)
