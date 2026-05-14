@@ -318,20 +318,22 @@ def run_dsm(nodes, elements, fixed_dofs, nodal_loads, member_loads, E, A, I):
     Ff  = F[ff]
 
     # ── Step 7: Solve ─────────────────────────────────────────
-    cond_num = np.linalg.cond(Kff)
-    if cond_num > 1e10:
-        st.warning(f"⚠️ Warning: The stiffness matrix is highly ill-conditioned (κ ≈ {cond_num:.2e}). Results may be plagued by round-off errors. Check for disconnected elements or extreme differences in element stiffness.")
-    try:
-        Uf = np.linalg.solve(Kff, Ff)
-    except np.linalg.LinAlgError:
-        raise ValueError(
-            "Singular stiffness matrix — structure is a mechanism. "
-            "Check boundary conditions (insufficient supports)."
-        )
-
     U = np.zeros(nDOF)
-    for i, gi in enumerate(ff):
-        U[gi] = Uf[i]
+    if ff:
+        cond_num = np.linalg.cond(Kff)
+        if cond_num > 1e10:
+            st.warning(f"⚠️ Warning: The stiffness matrix is highly ill-conditioned (κ ≈ {cond_num:.2e}). Results may be plagued by round-off errors. Check for disconnected elements or extreme differences in element stiffness.")
+        try:
+            Uf = np.linalg.solve(Kff, Ff)
+        except np.linalg.LinAlgError:
+            raise ValueError(
+                "Singular stiffness matrix — structure is a mechanism. "
+                "Check boundary conditions (insufficient supports)."
+            )
+        for i, gi in enumerate(ff):
+            U[gi] = Uf[i]
+    else:
+        cond_num = 0.0
 
     # ── Step 8: Member end forces (local) ────────────────────
     member_results = []
@@ -382,7 +384,7 @@ def run_dsm(nodes, elements, fixed_dofs, nodal_loads, member_loads, E, A, I):
         "free_global":  free_global,
         "elem_data":    elem_data,
         "K": K, "F": F, "F_nodal": F_nodal, "F_member": F_member,
-        "Kff": Kff, "Ff": Ff,
+        "Kff": Kff, "Ff": Ff, "cond_num": cond_num,
         "U": U,
         "member_results": member_results,
         "member_load_specs": normalized_loads,
@@ -632,20 +634,23 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads, member_loads=None,
 
 
 def _member_diagram_values(x, L, mr, load_specs):
-    """Sample local shear/moment from left-end forces and member loads."""
+    """Sample local shear/moment using the app's displayed member-force sign convention."""
+    # Displayed V_i/M_i are the negative of the element nodal force vector.
+    # Therefore dM/dx = -V, and downward transverse loads increase displayed V
+    # from left to right while reducing hogging moment toward the free end.
     V = mr["V_i"]
-    M = mr["M_i"] + mr["V_i"] * x
+    M = mr["M_i"] - mr["V_i"] * x
     for spec in load_specs:
         if spec["type"] == "UDL":
             w, a, b = spec["w"], spec["a"], spec["b"]
             covered = max(0.0, min(x, b) - a)
             if covered > 0:
-                V -= w * covered
+                V += w * covered
                 M -= w * covered * (x - (a + covered/2))
         else:
             P, xp = spec["P"], spec["x"]
             if x >= xp:
-                V -= P
+                V += P
                 M -= P * (x - xp)
     return V, M
 
