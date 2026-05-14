@@ -3,7 +3,7 @@
 ║   2D Frame Analyzer — Direct Stiffness Method (DSM) First        ║
 ║   Glass-Box Educational Tool for B.Tech / M.Tech Students        ║
 ║   Author  : Educational Structural Engineering Lab               ║
-║   Deploy  : streamlit run dsm_2d_frame.py                        ║
+║   Deploy  : streamlit run app.py                                  ║
 ║   Requires: streamlit, numpy, pandas, matplotlib                 ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
@@ -62,16 +62,18 @@ PRESETS = {
         "elements": [(0,1),(1,2),(2,3)],
         "fixed_dofs": {0:[0,1,2], 3:[0,1,2]},
         "E": 200e6, "A": 0.01, "I": 1e-4,
-        "nodal_loads": {1:{0:20.0}, 2:{1:-30.0}},
+        "nodal_loads": {1:{0:20.0}},
+        "member_loads": {1: 10.0},
         "labels": ["Left Col","Beam","Right Col"],
     },
     "Two-Span Continuous Beam": {
-        "desc": "Continuous beam on pin + 2 rollers — midspan point load on first span",
+        "desc": "Continuous beam on pin + 2 rollers — uniform gravity load on both spans",
         "nodes": [(0,0),(2.5,0),(5,0),(7.5,0),(10,0)],
         "elements": [(0,1),(1,2),(2,3),(3,4)],
         "fixed_dofs": {0:[0,1], 2:[1], 4:[1]},
         "E": 200e6, "A": 0.02, "I": 2e-4,
-        "nodal_loads": {1:{1:-100.0}},
+        "nodal_loads": {},
+        "member_loads": {0: 20.0, 1: 20.0, 2: 20.0, 3: 20.0},
         "labels": ["Span 1a","Span 1b","Span 2a","Span 2b"],
     },
     "Cantilever Beam (Tip Load)": {
@@ -81,6 +83,7 @@ PRESETS = {
         "fixed_dofs": {0:[0,1,2]},
         "E": 200e6, "A": 0.01, "I": 1e-4,
         "nodal_loads": {1:{1:-80.0}},
+        "member_loads": {},
         "labels": ["Cantilever"],
     },
     "Pitched Roof Frame": {
@@ -89,16 +92,126 @@ PRESETS = {
         "elements": [(0,1),(1,2),(2,3),(3,4)],
         "fixed_dofs": {0:[0,1,2], 4:[0,1,2]},
         "E": 200e6, "A": 0.015, "I": 1.5e-4,
-        "nodal_loads": {1:{1:-20.0}, 2:{1:-40.0}, 3:{1:-20.0}},
+        "nodal_loads": {2:{1:-20.0}},
+        "member_loads": {1: 12.0, 2: 12.0},
         "labels": ["Left Col","Left Rafter","Right Rafter","Right Col"],
+    },
+    "Plane Frame (Custom UDL + Point Load)": {
+        "desc": "Professional plane-frame example with partial-span UDL and member point load",
+        "nodes": [(0,0),(0,4),(5,4),(9,4),(9,0)],
+        "elements": [(0,1),(1,2),(2,3),(3,4)],
+        "fixed_dofs": {0:[0,1,2], 4:[0,1,2]},
+        "E": 200e6, "A": 0.012, "I": 1.2e-4,
+        "nodal_loads": {1:{0:12.0}},
+        "member_loads": [
+            {"element": 1, "type": "UDL", "w": 18.0, "a": 1.0, "b": 4.0},
+            {"element": 2, "type": "Point", "P": 35.0, "x": 2.0},
+        ],
+        "labels": ["Left Column","Beam A","Beam B","Right Column"],
     },
 }
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MEMBER LOAD HELPERS — plane-frame equivalent nodal loads
+# ══════════════════════════════════════════════════════════════════════════════
+def _clean_load_type(load_type):
+    text = str(load_type or "UDL").strip().lower()
+    if text.startswith("point") or text in {"pl", "p"}:
+        return "Point"
+    return "UDL"
+
+
+def normalize_member_loads(member_loads, elem_lengths=None):
+    """Return a list of standard member-load specs.
+
+    Supports the legacy `{element_id: w_down}` dict as full-span UDLs and the
+    newer list-of-dicts format with custom UDL spans and point-load positions.
+    Positive load values act downward in the member's local transverse direction.
+    """
+    specs = []
+    if member_loads is None:
+        return specs
+    if isinstance(member_loads, dict):
+        for eid, w in member_loads.items():
+            eid = int(eid)
+            if abs(float(w)) > 1e-12:
+                L = elem_lengths[eid] if elem_lengths and 0 <= eid < len(elem_lengths) else None
+                if L is None:
+                    continue
+                specs.append({"element": eid, "type": "UDL", "w": float(w),
+                              "a": 0.0, "b": L, "P": 0.0, "x": 0.0})
+        return specs
+    for row in member_loads:
+        if not row:
+            continue
+        eid = int(row.get("element", row.get("Element", 0)))
+        load_type = _clean_load_type(row.get("type", row.get("Type", "UDL")))
+        L = elem_lengths[eid] if elem_lengths and 0 <= eid < len(elem_lengths) else None
+        if load_type == "Point":
+            P = float(row.get("P", row.get("Load", row.get("load", 0.0))))
+            x = float(row.get("x", row.get("Position", row.get("position", 0.0))))
+            if abs(P) > 1e-12:
+                specs.append({"element": eid, "type": "Point", "P": P, "x": x,
+                              "a": x, "b": x, "w": 0.0})
+        else:
+            w = float(row.get("w", row.get("Load", row.get("load", 0.0))))
+            a = float(row.get("a", row.get("Start", row.get("start", 0.0))))
+            raw_b = row.get("b", row.get("End", row.get("end", L)))
+            b = L if raw_b is None or str(raw_b).strip() == "" else float(raw_b)
+            if abs(w) > 1e-12:
+                specs.append({"element": eid, "type": "UDL", "w": w,
+                              "a": a, "b": b, "P": 0.0, "x": 0.0})
+    return specs
+
+
+def _beam_shape_functions(x, L):
+    xi = x / L
+    return np.array([
+        1 - 3*xi**2 + 2*xi**3,
+        L * (xi - 2*xi**2 + xi**3),
+        3*xi**2 - 2*xi**3,
+        L * (-xi**2 + xi**3),
+    ])
+
+
+def equivalent_member_load_vector(load_specs, L):
+    """Consistent local nodal load vector for transverse UDL/point loads."""
+    p_local = np.zeros(6)
+    applied = []
+    for spec in load_specs:
+        ltype = _clean_load_type(spec.get("type"))
+        if ltype == "UDL":
+            w = float(spec.get("w", 0.0))
+            a = max(0.0, min(L, float(spec.get("a", 0.0))))
+            b = max(0.0, min(L, float(spec.get("b", L))))
+            if b < a:
+                a, b = b, a
+            if b - a <= 1e-12 or abs(w) <= 1e-12:
+                continue
+            pts, weights = np.polynomial.legendre.leggauss(8)
+            xs = 0.5*(b-a)*pts + 0.5*(a+b)
+            ws = 0.5*(b-a)*weights
+            q = -w  # positive UI value = downward local transverse load
+            for x, wt in zip(xs, ws):
+                N1, N2, N3, N4 = _beam_shape_functions(float(x), L)
+                p_local[[1, 2, 4, 5]] += wt * q * np.array([N1, N2, N3, N4])
+            applied.append({"type": "UDL", "w": w, "a": a, "b": b})
+        else:
+            P = float(spec.get("P", 0.0))
+            x = max(0.0, min(L, float(spec.get("x", 0.0))))
+            if abs(P) <= 1e-12:
+                continue
+            N1, N2, N3, N4 = _beam_shape_functions(x, L)
+            p_local[[1, 2, 4, 5]] += -P * np.array([N1, N2, N3, N4])
+            applied.append({"type": "Point", "P": P, "x": x})
+    return p_local, applied
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  DSM SOLVER — returns full step-by-step data
 # ══════════════════════════════════════════════════════════════════════════════
-def run_dsm(nodes, elements, fixed_dofs, nodal_loads, E, A, I):
+def run_dsm(nodes, elements, fixed_dofs, nodal_loads, member_loads, E, A, I):
     """
     Parameters
     ----------
@@ -106,6 +219,7 @@ def run_dsm(nodes, elements, fixed_dofs, nodal_loads, E, A, I):
     elements     : list of (ni, nj) node-index pairs
     fixed_dofs   : dict {node_id: [local_dof_indices]}  — 0=u,1=v,2=θ
     nodal_loads  : dict {node_id: {local_dof: value}}  — kN or kN·m
+    member_loads : list/dict — UDL or point member loads in local transverse direction
     E, A, I      : material / section (kN/m² , m², m⁴)
 
     Returns a dict with all intermediate matrices for each step.
@@ -165,21 +279,41 @@ def run_dsm(nodes, elements, fixed_dofs, nodal_loads, E, A, I):
             "c": c, "s": s,
             "k_loc": k_loc, "T6": T6, "k_glob": k_glob,
             "gdofs": gdofs,
+            "p_local": np.zeros(6),
+            "p_global": np.zeros(6),
+            "member_load_specs": [],
         })
 
     # ── Step 5: Assemble global K and F ─────────────────────
     K = np.zeros((nDOF, nDOF))
     F = np.zeros(nDOF)
+    F_nodal = np.zeros(nDOF)
+    F_member = np.zeros(nDOF)
 
-    for ed in elem_data:
+    elem_lengths = [ed["L"] for ed in elem_data]
+    normalized_loads = normalize_member_loads(member_loads, elem_lengths)
+    loads_by_element = {i: [] for i in range(ne)}
+    for spec in normalized_loads:
+        if 0 <= spec["element"] < ne:
+            loads_by_element[spec["element"]].append(spec)
+
+    for idx, ed in enumerate(elem_data):
         gdofs = ed["gdofs"]
+        p_local, applied_specs = equivalent_member_load_vector(loads_by_element.get(idx, []), ed["L"])
+        if applied_specs:
+            ed["p_local"] = p_local
+            ed["p_global"] = ed["T6"].T @ p_local
+            ed["member_load_specs"] = applied_specs
         for r, gr in enumerate(gdofs):
+            F_member[gr] += ed["p_global"][r]
             for c2, gc in enumerate(gdofs):
                 K[gr, gc] += ed["k_glob"][r, c2]
 
     for nid, ldmap in nodal_loads.items():
         for ld, val in ldmap.items():
-            F[dof_map[nid][ld]] += val
+            F_nodal[dof_map[nid][ld]] += val
+
+    F = F_nodal + F_member
 
     # ── Step 6: Partition ─────────────────────────────────────
     ff = free_global
@@ -187,31 +321,35 @@ def run_dsm(nodes, elements, fixed_dofs, nodal_loads, E, A, I):
     Ff  = F[ff]
 
     # ── Step 7: Solve ─────────────────────────────────────────
-    cond_num = np.linalg.cond(Kff)
-    if cond_num > 1e10:
-        st.warning(f"⚠️ Warning: The stiffness matrix is highly ill-conditioned (κ ≈ {cond_num:.2e}). Results may be plagued by round-off errors. Check for disconnected elements or extreme differences in element stiffness.")
-    try:
-        Uf = np.linalg.solve(Kff, Ff)
-    except np.linalg.LinAlgError:
-        raise ValueError(
-            "Singular stiffness matrix — structure is a mechanism. "
-            "Check boundary conditions (insufficient supports)."
-        )
-
     U = np.zeros(nDOF)
-    for i, gi in enumerate(ff):
-        U[gi] = Uf[i]
+    if ff:
+        cond_num = np.linalg.cond(Kff)
+        if cond_num > 1e10:
+            st.warning(f"⚠️ Warning: The stiffness matrix is highly ill-conditioned (κ ≈ {cond_num:.2e}). Results may be plagued by round-off errors. Check for disconnected elements or extreme differences in element stiffness.")
+        try:
+            Uf = np.linalg.solve(Kff, Ff)
+        except np.linalg.LinAlgError:
+            raise ValueError(
+                "Singular stiffness matrix — structure is a mechanism. "
+                "Check boundary conditions (insufficient supports)."
+            )
+        for i, gi in enumerate(ff):
+            U[gi] = Uf[i]
+    else:
+        cond_num = 0.0
 
     # ── Step 8: Member end forces (local) ────────────────────
     member_results = []
     for ed in elem_data:
         u_el  = U[ed["gdofs"]]                  # global displacements
         u_loc = ed["T6"] @ u_el                 # in local coords
-        f_loc = ed["k_loc"] @ u_loc             # local end forces
+        f_loc = ed["k_loc"] @ u_loc - ed["p_local"]  # local member end forces incl. fixed-end load effects
         member_results.append({
             "u_global": u_el,
             "u_local":  u_loc,
             "f_local":  f_loc,
+            "p_local":  ed["p_local"],
+            "member_load_specs": ed["member_load_specs"],
             # Force member exerts ON joint = negative of internal force vector
             "N_i": -f_loc[0], "V_i": -f_loc[1], "M_i": -f_loc[2],
             "N_j": -f_loc[3], "V_j": -f_loc[4], "M_j": -f_loc[5],
@@ -221,7 +359,8 @@ def run_dsm(nodes, elements, fixed_dofs, nodal_loads, E, A, I):
     R_full = K @ U - F
     reactions = {gi: R_full[gi] for gi in fixed_global}
 
-    # True global moment equilibrium about origin
+    # True global force/moment equilibrium about origin. Equivalent member
+    # loads are already in F_member, so they can be checked with nodal loads.
     sigma_M = 0.0
     for nid in fixed_dofs:
         x, y = nodes[nid]
@@ -229,16 +368,15 @@ def run_dsm(nodes, elements, fixed_dofs, nodal_loads, E, A, I):
         Ry = R_full[dof_map[nid][1]]
         RM = R_full[dof_map[nid][2]]
         sigma_M += RM + Ry * x - Rx * y
-    for nid, ldmap in nodal_loads.items():
-        x, y = nodes[nid]
-        Fx = ldmap.get(0, 0.0); Fy = ldmap.get(1, 0.0); M = ldmap.get(2, 0.0)
+    for nid, (x, y) in enumerate(nodes):
+        Fx = F[dof_map[nid][0]]
+        Fy = F[dof_map[nid][1]]
+        M = F[dof_map[nid][2]]
         sigma_M += M + Fy * x - Fx * y
 
     eq_check = {
-        "ΣFx": sum(R_full[dof_map[n][0]] for n in fixed_dofs) +
-               sum(v for nid, ldm in nodal_loads.items() for ld, v in ldm.items() if ld == 0),
-        "ΣFy": sum(R_full[dof_map[n][1]] for n in fixed_dofs) +
-               sum(v for nid, ldm in nodal_loads.items() for ld, v in ldm.items() if ld == 1),
+        "ΣFx": sum(R_full[dof_map[n][0]] for n in fixed_dofs) + sum(F[0::3]),
+        "ΣFy": sum(R_full[dof_map[n][1]] for n in fixed_dofs) + sum(F[1::3]),
         "ΣM":  sigma_M,
     }
 
@@ -248,10 +386,11 @@ def run_dsm(nodes, elements, fixed_dofs, nodal_loads, E, A, I):
         "fixed_global": fixed_global,
         "free_global":  free_global,
         "elem_data":    elem_data,
-        "K": K, "F": F,
-        "Kff": Kff, "Ff": Ff,
+        "K": K, "F": F, "F_nodal": F_nodal, "F_member": F_member,
+        "Kff": Kff, "Ff": Ff, "cond_num": cond_num,
         "U": U,
         "member_results": member_results,
+        "member_load_specs": normalized_loads,
         "reactions": reactions,
         "eq_check": eq_check,
     }
@@ -287,7 +426,7 @@ def show_matrix(M, row_labels=None, col_labels=None, caption="", highlight_rows=
         return styles
 
     styled = df.style.apply(styler, axis=None)
-    st.dataframe(styled, use_container_width=True, height=min(35*n+38, 500))
+    st.dataframe(styled, width="stretch", height=min(35*n+38, 500))
     if caption:
         st.caption(caption)
 
@@ -307,7 +446,7 @@ def show_vector(v, labels=None, caption="", highlight=None):
         return styles
 
     styled = df.style.apply(styler, axis=None)
-    st.dataframe(styled, use_container_width=True, height=min(35*n+38, 400))
+    st.dataframe(styled, width="stretch", height=min(35*n+38, 400))
     if caption:
         st.caption(caption)
 
@@ -326,7 +465,12 @@ def classify_support(fixed_ldofs):
     if 0 in fixed_ldofs and 1 in fixed_ldofs: return "pin"
     return "roller"
 
-def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
+
+def _valid_node_index(nodes, idx):
+    return isinstance(idx, (int, np.integer)) and 0 <= int(idx) < len(nodes)
+
+
+def draw_frame(nodes, elements, fixed_dofs, nodal_loads, member_loads=None,
                U=None, dof_map=None, reactions=None,
                scale=0.3, show_dofs=False, show_loads=True,
                show_deformed=False, show_reactions=False,
@@ -338,17 +482,25 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
     for spine in ax.spines.values():
         spine.set_edgecolor("#cbd5e1")
 
+    if not nodes:
+        ax.text(0.5, 0.5, "No valid nodes to display", transform=ax.transAxes,
+                ha="center", va="center", color="#991b1b", fontfamily="monospace")
+        ax.set_axis_off()
+        return fig
+
     xs = [n[0] for n in nodes]; ys = [n[1] for n in nodes]
     span = max(max(xs)-min(xs), max(ys)-min(ys), 1.0)
     arrowsc = span * 0.08   # arrow scale
+    valid_elements = [(idx, int(ni), int(nj)) for idx, (ni, nj) in enumerate(elements)
+                      if _valid_node_index(nodes, ni) and _valid_node_index(nodes, nj)]
 
     # ── Draw elements ──────────────────────────────────────────
     colors = ["#2563eb","#d97706","#7c3aed","#059669","#dc2626"]
-    for idx, (ni, nj) in enumerate(elements):
+    for idx, ni, nj in valid_elements:
         xi, yi = nodes[ni]; xj, yj = nodes[nj]
         col = colors[idx % len(colors)]
         ax.plot([xi, xj], [yi, yj], color=col, lw=3, solid_capstyle="round", zorder=3)
-        if elem_labels:
+        if elem_labels and idx < len(elem_labels):
             mx, my = (xi+xj)/2, (yi+yj)/2
             ax.text(mx, my, elem_labels[idx], color=col, fontsize=8,
                     ha="center", va="bottom", fontfamily="monospace",
@@ -358,7 +510,9 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
     if show_deformed and U is not None and dof_map is not None:
         disp_max = max(abs(U)) if max(abs(U)) > 1e-12 else 1
         sc = scale * span / disp_max
-        for ni, nj in elements:
+        for _, ni, nj in valid_elements:
+            if ni not in dof_map or nj not in dof_map:
+                continue
             xi, yi = nodes[ni]; xj, yj = nodes[nj]
             ui = U[dof_map[ni][:2]]; uj = U[dof_map[nj][:2]]
             ax.plot([xi+sc*ui[0], xj+sc*uj[0]],
@@ -375,6 +529,8 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
 
     # ── Draw supports ─────────────────────────────────────────
     for nid, ldofs in fixed_dofs.items():
+        if not _valid_node_index(nodes, nid):
+            continue
         x, y = nodes[nid]
         stype = classify_support(ldofs)
         if stype == "fixed":
@@ -397,7 +553,48 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
 
     # ── Draw loads ────────────────────────────────────────────
     if show_loads:
+        lengths = [None] * len(elements)
+        for idx, ni, nj in valid_elements:
+            lengths[idx] = max(math.hypot(nodes[nj][0]-nodes[ni][0], nodes[nj][1]-nodes[ni][1]), 1e-9)
+        specs_by_element = {i: [] for i in range(len(elements))}
+        for spec in normalize_member_loads(member_loads, lengths):
+            if 0 <= spec["element"] < len(elements) and lengths[spec["element"]] is not None:
+                specs_by_element[spec["element"]].append(spec)
+        for idx, ni, nj in valid_elements:
+            xi, yi = nodes[ni]; xj, yj = nodes[nj]
+            L = lengths[idx]
+            alpha = math.atan2(yj-yi, xj-xi)
+            # Downward local transverse load direction for positive loads.
+            nx, ny = math.sin(alpha), -math.cos(alpha)
+            for spec in specs_by_element.get(idx, []):
+                if spec["type"] == "UDL":
+                    w = spec["w"]
+                    a, b = spec["a"], spec["b"]
+                    n_arrows = max(2, min(8, int((b-a) / max(L, 1e-9) * 8) + 1))
+                    for k in range(1, n_arrows + 1):
+                        xloc = a + (b-a) * k / (n_arrows + 1)
+                        t = xloc / L
+                        x = xi + t*(xj-xi); y = yi + t*(yj-yi)
+                        ax.annotate("", xy=(x, y), xytext=(x - nx*arrowsc*0.75, y - ny*arrowsc*0.75),
+                                    arrowprops=dict(arrowstyle="->", color="#ea580c", lw=1.4, alpha=0.8))
+                    tm = ((a+b)/2) / L
+                    ax.text(xi + tm*(xj-xi) + nx*arrowsc*0.35, yi + tm*(yj-yi) + ny*arrowsc*0.35,
+                            f"w={w:.2g} kN/m", color="#ea580c", fontsize=8,
+                            ha="center", fontfamily="monospace",
+                            bbox=dict(boxstyle="round,pad=0.2", fc="#fff7ed", ec="#fdba74", lw=0.8))
+                else:
+                    P, xloc = spec["P"], spec["x"]
+                    t = xloc / L
+                    x = xi + t*(xj-xi); y = yi + t*(yj-yi)
+                    ax.annotate("", xy=(x, y), xytext=(x - nx*arrowsc, y - ny*arrowsc),
+                                arrowprops=dict(arrowstyle="-|>", color="#b45309", lw=2.2))
+                    ax.text(x + nx*arrowsc*0.45, y + ny*arrowsc*0.45, f"P={P:.2g} kN",
+                            color="#b45309", fontsize=8, ha="center", fontfamily="monospace",
+                            bbox=dict(boxstyle="round,pad=0.2", fc="#fffbeb", ec="#f59e0b", lw=0.8))
+
         for nid, ldmap in nodal_loads.items():
+            if not _valid_node_index(nodes, nid):
+                continue
             x, y = nodes[nid]
             for ld, val in ldmap.items():
                 if ld == 0:  # Fx
@@ -418,6 +615,8 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
         colors_dof = ["#1d4ed8","#15803d","#7c3aed"]
         labels_dof = ["u","v","θ"]
         for nid, gdofs in dof_map.items():
+            if not _valid_node_index(nodes, nid):
+                continue
             x, y = nodes[nid]
             offsets = [(arrowsc*1.1, 0),(0, arrowsc*1.1),(arrowsc*0.6, arrowsc*0.6)]
             for d, (dx, dy) in enumerate(offsets):
@@ -430,6 +629,8 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
     # ── Draw reactions ────────────────────────────────────────
     if show_reactions and reactions is not None and dof_map is not None:
         for nid, ldofs in fixed_dofs.items():
+            if not _valid_node_index(nodes, nid) or nid not in dof_map:
+                continue
             x, y = nodes[nid]
             for ld in ldofs:
                 gi = dof_map[nid][ld]
@@ -459,11 +660,52 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads,
     return fig
 
 
-def draw_bmd_sfd(nodes, elements, member_results, elem_labels=None):
-    """Draw Bending Moment and Shear Force diagrams."""
+def _member_diagram_values(x, L, mr, load_specs):
+    """Sample local shear/moment using the app's displayed member-force sign convention."""
+    # Displayed V_i/M_i are the negative of the element nodal force vector.
+    # Therefore dM/dx = -V, and downward transverse loads increase displayed V
+    # from left to right while reducing hogging moment toward the free end.
+    V = mr["V_i"]
+    M = mr["M_i"] - mr["V_i"] * x
+    for spec in load_specs:
+        if spec["type"] == "UDL":
+            w, a, b = spec["w"], spec["a"], spec["b"]
+            covered = max(0.0, min(x, b) - a)
+            if covered > 0:
+                V += w * covered
+                M -= w * covered * (x - (a + covered/2))
+        else:
+            P, xp = spec["P"], spec["x"]
+            if x >= xp:
+                V += P
+                M -= P * (x - xp)
+    return V, M
+
+
+def _local_deflection_at(x, L, u_local):
+    xi = x / L
+    Nu_i = 1 - xi
+    Nu_j = xi
+    N1, N2, N3, N4 = _beam_shape_functions(x, L)
+    u = Nu_i*u_local[0] + Nu_j*u_local[3]
+    v = N1*u_local[1] + N2*u_local[2] + N3*u_local[4] + N4*u_local[5]
+    return u, v
+
+
+def draw_bmd_sfd(nodes, elements, member_results, elem_labels=None, member_loads=None):
+    """Draw improved bending-moment and shear-force diagrams with point/partial UDL loads."""
     fig, axes = plt.subplots(1, 2, figsize=(14, 6), facecolor="#f8fafc")
     titles = ["Bending Moment Diagram (kN·m)", "Shear Force Diagram (kN)"]
     colors = ["#7c3aed", "#0891b2"]
+    lengths = [max(math.hypot(nodes[nj][0]-nodes[ni][0], nodes[nj][1]-nodes[ni][1]), 1e-9)
+               for ni, nj in elements]
+    specs_by_element = {i: [] for i in range(len(elements))}
+    for spec in normalize_member_loads(member_loads, lengths):
+        if 0 <= spec["element"] < len(elements):
+            specs_by_element[spec["element"]].append(spec)
+
+    xs = [n[0] for n in nodes]; ys = [n[1] for n in nodes]
+    span = max(max(xs)-min(xs), max(ys)-min(ys), 1.0)
 
     for ax_idx, ax in enumerate(axes):
         ax.set_facecolor("#ffffff")
@@ -473,56 +715,88 @@ def draw_bmd_sfd(nodes, elements, member_results, elem_labels=None):
         ax.set_title(titles[ax_idx], color="#1e40af", fontfamily="monospace", pad=10)
         ax.grid(True, color="#e2e8f0", lw=0.5)
 
-        xs = [n[0] for n in nodes]; ys = [n[1] for n in nodes]
-        span = max(max(xs)-min(xs), max(ys)-min(ys), 1.0)
-
-        # Draw element skeleton
         for ni, nj in elements:
             ax.plot([nodes[ni][0], nodes[nj][0]], [nodes[ni][1], nodes[nj][1]],
                     color="#94a3b8", lw=1, zorder=1)
 
         for idx, ((ni, nj), mr) in enumerate(zip(elements, member_results)):
             xi, yi = nodes[ni]; xj, yj = nodes[nj]
-            L = math.hypot(xj-xi, yj-yi)
+            L = lengths[idx]
             alpha = math.atan2(yj-yi, xj-xi)
-            c, s  = math.cos(alpha), math.sin(alpha)
-            perp  = (-s, c)
+            perp = (-math.sin(alpha), math.cos(alpha))
+            load_specs = specs_by_element.get(idx, mr.get("member_load_specs", []))
+            sample_x = sorted(set([0.0, L] +
+                                  [k*L/80 for k in range(81)] +
+                                  [s["a"] for s in load_specs if s["type"] == "UDL"] +
+                                  [s["b"] for s in load_specs if s["type"] == "UDL"] +
+                                  [s["x"] for s in load_specs if s["type"] == "Point"]))
+            values = []
+            for xloc in sample_x:
+                V, M = _member_diagram_values(xloc, L, mr, load_specs)
+                values.append(M if ax_idx == 0 else V)
+            scale = span * 0.16 / max(max(abs(v) for v in values), 1)
+            pts_x, pts_y, base_x, base_y = [], [], [], []
+            for xloc, val in zip(sample_x, values):
+                t = xloc / L
+                bx = xi + t*(xj-xi); by = yi + t*(yj-yi)
+                base_x.append(bx); base_y.append(by)
+                pts_x.append(bx + scale*val*perp[0]); pts_y.append(by + scale*val*perp[1])
 
-            if ax_idx == 0:  # BMD
-                Mi = mr["M_i"]; Mj = mr["M_j"]
-            else:             # SFD
-                Mi = mr["V_i"]; Mj = mr["V_j"]
-
-            scale = span * 0.15 / max(max(abs(Mi), abs(Mj), 1e-9), 1)
-            n_pts = 20
-            pts_x, pts_y = [], []
-            for k in range(n_pts+1):
-                t = k / n_pts
-                val = Mi*(1-t) + Mj*t   # linear interpolation
-                px = xi + t*(xj-xi) + scale*val*perp[0]
-                py = yi + t*(yj-yi) + scale*val*perp[1]
-                pts_x.append(px); pts_y.append(py)
-
-            col = colors[idx % len(colors)]
-            # Baseline
-            ax.plot([xi, xj], [yi, yj], color="#94a3b8", lw=1)
-            # Filled BMD/SFD
-            bx = [xi + t*(xj-xi) for t in [k/n_pts for k in range(n_pts+1)]]
-            by = [yi + t*(yj-yi) for t in [k/n_pts for k in range(n_pts+1)]]
-            ax.fill(bx+pts_x[::-1], by+pts_y[::-1], color=col, alpha=0.25)
+            col = colors[ax_idx]
+            ax.fill(base_x + pts_x[::-1], base_y + pts_y[::-1], color=col, alpha=0.22)
             ax.plot(pts_x, pts_y, color=col, lw=2)
-
-            # Labels at ends
-            ax.text(xi + scale*Mi*perp[0]*1.1, yi + scale*Mi*perp[1]*1.1,
-                    f"{Mi:.1f}", color=col, fontsize=7, ha="center", fontfamily="monospace")
-            ax.text(xj + scale*Mj*perp[0]*1.1, yj + scale*Mj*perp[1]*1.1,
-                    f"{Mj:.1f}", color=col, fontsize=7, ha="center", fontfamily="monospace")
+            for xloc, val in [(sample_x[0], values[0]), (sample_x[-1], values[-1]),
+                              (sample_x[int(np.argmax(np.abs(values)))], values[int(np.argmax(np.abs(values)))])]:
+                t = xloc / L
+                bx = xi + t*(xj-xi); by = yi + t*(yj-yi)
+                ax.text(bx + scale*val*perp[0]*1.12, by + scale*val*perp[1]*1.12,
+                        f"{val:.1f}", color=col, fontsize=7, ha="center", fontfamily="monospace")
+            if elem_labels:
+                ax.text((xi+xj)/2, (yi+yj)/2, elem_labels[idx], color="#475569",
+                        fontsize=7, ha="center", va="bottom", fontfamily="monospace")
 
         ax.set_aspect("equal")
         margin = span * 0.25
         ax.set_xlim(min(xs)-margin, max(xs)+margin)
         ax.set_ylim(min(ys)-margin, max(ys)+margin)
 
+    plt.tight_layout()
+    return fig
+
+
+def draw_deflection_diagram(nodes, elements, member_results, scale=0.3, elem_labels=None):
+    """Draw a smooth plane-frame deflection diagram using beam shape functions."""
+    fig, ax = plt.subplots(figsize=(11, 7), facecolor="#f8fafc")
+    ax.set_facecolor("#ffffff")
+    xs = [n[0] for n in nodes]; ys = [n[1] for n in nodes]
+    span = max(max(xs)-min(xs), max(ys)-min(ys), 1.0)
+    max_disp = max(max(abs(mr["u_local"][i]) for i in [0, 1, 3, 4]) for mr in member_results) or 1.0
+    sc = scale * span / max(max_disp, 1e-12)
+    for idx, ((ni, nj), mr) in enumerate(zip(elements, member_results)):
+        xi, yi = nodes[ni]; xj, yj = nodes[nj]
+        L = max(math.hypot(xj-xi, yj-yi), 1e-9)
+        alpha = math.atan2(yj-yi, xj-xi)
+        c, s = math.cos(alpha), math.sin(alpha)
+        base_x = [xi + t*(xj-xi) for t in np.linspace(0, 1, 30)]
+        base_y = [yi + t*(yj-yi) for t in np.linspace(0, 1, 30)]
+        ax.plot(base_x, base_y, color="#94a3b8", lw=1.2)
+        dxs, dys = [], []
+        for xloc in np.linspace(0, L, 50):
+            u, v = _local_deflection_at(float(xloc), L, mr["u_local"])
+            gx = xi + (xloc/L)*(xj-xi) + sc*(c*u - s*v)
+            gy = yi + (xloc/L)*(yj-yi) + sc*(s*u + c*v)
+            dxs.append(gx); dys.append(gy)
+        ax.plot(dxs, dys, color="#dc2626", lw=2.4)
+        if elem_labels:
+            ax.text((xi+xj)/2, (yi+yj)/2, elem_labels[idx], color="#475569",
+                    fontsize=8, ha="center", fontfamily="monospace")
+    ax.scatter(xs, ys, s=45, color="#1e293b", zorder=3)
+    ax.set_title("Deflection Diagram (smooth, exaggerated)", color="#1e40af", fontfamily="monospace")
+    ax.grid(True, color="#e2e8f0", lw=0.5)
+    ax.set_aspect("equal")
+    margin = span * 0.25
+    ax.set_xlim(min(xs)-margin, max(xs)+margin)
+    ax.set_ylim(min(ys)-margin, max(ys)+margin)
     plt.tight_layout()
     return fig
 
@@ -556,6 +830,8 @@ with st.sidebar:
 
     P = PRESETS[chosen]
     st.info(P["desc"])
+    st.markdown("### 🧭 Analysis Mode")
+    st.success("Plane Frame (2D beam-column): axial, shear, bending, rotations, reactions, SFD/BMD, and deflection diagrams")
 
     st.divider()
     st.markdown("### ⚙️ Material & Section")
@@ -572,7 +848,7 @@ with st.sidebar:
     node_df = pd.DataFrame(
         [{"Node": f"N{i+1}", "x (m)": x, "y (m)": y} for i,(x,y) in enumerate(P["nodes"])]
     )
-    node_df = st.data_editor(node_df, num_rows="dynamic", use_container_width=True,
+    node_df = st.data_editor(node_df, num_rows="dynamic", width="stretch",
                               key=f"nodes_{chosen}")
 
     st.caption("Elements (node index pairs, 1-based)")
@@ -580,7 +856,7 @@ with st.sidebar:
         [{"Elem": f"E{i+1}", "Node i": ni+1, "Node j": nj+1, "Label": lbl}
          for i, ((ni, nj), lbl) in enumerate(zip(P["elements"], P["labels"]))]
     )
-    elem_df = st.data_editor(elem_df, num_rows="dynamic", use_container_width=True,
+    elem_df = st.data_editor(elem_df, num_rows="dynamic", width="stretch",
                               key=f"elems_{chosen}")
 
     st.divider()
@@ -607,11 +883,37 @@ with st.sidebar:
             load_rows.append({"Node": nid+1, "DOF (0=u,1=v,2=θ)": ld, "Value (kN or kN·m)": val})
     load_df = pd.DataFrame(load_rows if load_rows else
                            [{"Node": 1, "DOF (0=u,1=v,2=θ)": 1, "Value (kN or kN·m)": 0.0}])
-    load_df = st.data_editor(load_df, num_rows="dynamic", use_container_width=True,
+    load_df = st.data_editor(load_df, num_rows="dynamic", width="stretch",
                               key=f"loads_{chosen}")
 
     st.divider()
-    run_btn = st.button("🚀 Run DSM Analysis", type="primary", use_container_width=True)
+    st.markdown("### ⏬ Standard Member Loads")
+    st.caption("Plane-frame member loads in local transverse direction. UDL supports custom start/end spans; point loads use position x from node i. Positive = downward.")
+    preset_lengths = [math.hypot(P["nodes"][nj][0]-P["nodes"][ni][0], P["nodes"][nj][1]-P["nodes"][ni][1])
+                      for ni, nj in P["elements"]]
+    member_rows = []
+    for spec in normalize_member_loads(P.get("member_loads", []), preset_lengths):
+        if spec["type"] == "Point":
+            member_rows.append({"Element": f"E{spec['element']+1}", "Type": "Point", "Load ↓": spec["P"],
+                                "Start x": "", "End x": "", "Position x": spec["x"]})
+        else:
+            member_rows.append({"Element": f"E{spec['element']+1}", "Type": "UDL", "Load ↓": spec["w"],
+                                "Start x": spec["a"], "End x": spec["b"], "Position x": ""})
+    load_spec_df = pd.DataFrame(member_rows if member_rows else [
+        {"Element": "E1", "Type": "UDL", "Load ↓": 0.0, "Start x": 0.0, "End x": "", "Position x": ""}
+    ])
+    load_spec_df = st.data_editor(
+        load_spec_df, num_rows="dynamic", width="stretch", key=f"member_loads_{chosen}",
+        column_config={
+            "Type": st.column_config.SelectboxColumn("Type", options=["UDL", "Point"]),
+            "Load ↓": st.column_config.NumberColumn("Load ↓", help="UDL in kN/m or point load in kN"),
+        },
+    )
+
+    st.divider()
+    st.markdown("### ✅ Quality Controls")
+    st.caption("Model checks include invalid connectivity, duplicate members, zero-length elements, property positivity, and matrix conditioning.")
+    run_btn = st.button("🚀 Run DSM Analysis", type="primary", width="stretch")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -621,57 +923,176 @@ def _is_valid_row(r, keys):
     """Return True only if all required keys have non-None, non-empty values."""
     for k in keys:
         v = r.get(k)
-        if v is None or str(v).strip() in ("", "None"):
+        if v is None or pd.isna(v) or str(v).strip() in ("", "None", "nan"):
             return False
     return True
 
-nodes_parsed = [
-    (float(r["x (m)"]), float(r["y (m)"]))
-    for _, r in node_df.iterrows()
-    if _is_valid_row(r, ["x (m)", "y (m)"])
-]
-elems_parsed = [
-    (int(r["Node i"]) - 1, int(r["Node j"]) - 1)
-    for _, r in elem_df.iterrows()
-    if _is_valid_row(r, ["Node i", "Node j"])
-]
-elem_labels_p = [
-    str(r["Label"]) if _is_valid_row(r, ["Label"]) else f"E{i+1}"
-    for i, (_, r) in enumerate(elem_df.iterrows())
-    if _is_valid_row(r, ["Node i", "Node j"])
-]
+
+def _optional_float(value, default=0.0):
+    if value is None or pd.isna(value) or str(value).strip() in ("", "None", "nan"):
+        return default
+    return float(value)
+
+
+def _optional_int(value, default=None):
+    if value is None or pd.isna(value) or str(value).strip() in ("", "None", "nan"):
+        return default
+    return int(float(value))
+
+
+nodes_parsed = []
+for _, r in node_df.iterrows():
+    if _is_valid_row(r, ["x (m)", "y (m)"]):
+        try:
+            nodes_parsed.append((float(r["x (m)"]), float(r["y (m)"])))
+        except (TypeError, ValueError):
+            pass
+
+elems_parsed = []
+elem_labels_p = []
+for i, (_, r) in enumerate(elem_df.iterrows()):
+    if _is_valid_row(r, ["Node i", "Node j"]):
+        try:
+            elems_parsed.append((_optional_int(r["Node i"]) - 1, _optional_int(r["Node j"]) - 1))
+            elem_labels_p.append(str(r["Label"]) if _is_valid_row(r, ["Label"]) else f"E{i+1}")
+        except (TypeError, ValueError):
+            pass
 
 nodal_loads_parsed = {}
 for _, r in load_df.iterrows():
     if not _is_valid_row(r, ["Node", "DOF (0=u,1=v,2=θ)", "Value (kN or kN·m)"]):
         continue
-    nid = int(r["Node"]) - 1; ld = int(r["DOF (0=u,1=v,2=θ)"]); val = float(r["Value (kN or kN·m)"])
+    try:
+        nid = _optional_int(r["Node"]) - 1
+        ld = _optional_int(r["DOF (0=u,1=v,2=θ)"])
+        val = float(r["Value (kN or kN·m)"])
+    except (TypeError, ValueError):
+        continue
     if abs(val) > 1e-10:
         nodal_loads_parsed.setdefault(nid, {})[ld] = val
+
+member_loads_parsed = []
+for _, r in load_spec_df.iterrows():
+    if not _is_valid_row(r, ["Element", "Type", "Load ↓"]):
+        continue
+    raw_elem = str(r["Element"]).strip().upper().replace("E", "")
+    if not raw_elem:
+        continue
+    try:
+        eid = int(float(raw_elem)) - 1
+        load_type = _clean_load_type(r["Type"])
+        load_value = float(r["Load ↓"])
+    except (TypeError, ValueError):
+        continue
+    if abs(load_value) <= 1e-10:
+        continue
+    if load_type == "Point":
+        try:
+            x = _optional_float(r.get("Position x"), 0.0)
+        except (TypeError, ValueError):
+            continue
+        member_loads_parsed.append({"element": eid, "type": "Point", "P": load_value, "x": x})
+    else:
+        try:
+            a = _optional_float(r.get("Start x"), 0.0)
+            raw_b = r.get("End x")
+            b = None if raw_b is None or pd.isna(raw_b) or str(raw_b).strip() == "" else float(raw_b)
+        except (TypeError, ValueError):
+            continue
+        member_loads_parsed.append({"element": eid, "type": "UDL", "w": load_value,
+                                    "a": a, "b": b})
+
+preview_warnings = []
+if nodes_parsed:
+    max_preview_node = len(nodes_parsed) - 1
+    invalid_preview_elems = [f"E{i+1}" for i, (ni, nj) in enumerate(elems_parsed)
+                             if ni < 0 or nj < 0 or ni > max_preview_node or nj > max_preview_node]
+    if invalid_preview_elems:
+        preview_warnings.append(
+            "Invalid element connectivity: " + ", ".join(invalid_preview_elems) +
+            f". Fix node references before running analysis (valid range N1–N{len(nodes_parsed)})."
+        )
+    invalid_preview_supports = [f"N{nid+1}" for nid in fixed_dofs_ui if nid < 0 or nid > max_preview_node]
+    if invalid_preview_supports:
+        preview_warnings.append("Invalid support rows ignored in preview: " + ", ".join(invalid_preview_supports))
+else:
+    preview_warnings.append("No valid node coordinates are available to preview.")
 
 if run_btn:
     if len(nodes_parsed) < 2:
         st.error("🚨 Need at least 2 nodes.")
     elif len(elems_parsed) < 1:
         st.error("🚨 Need at least 1 element.")
+    elif E_val <= 0 or A_val <= 0 or I_val <= 0:
+        st.error("🚨 Material and section properties must be positive: E > 0, A > 0, I > 0.")
     elif not fixed_dofs_ui:
         st.error("🚨 No boundary conditions defined — structure is a mechanism.")
     else:
-        # Validate element node indices
         max_node = len(nodes_parsed) - 1
         bad = [(i, ni, nj) for i, (ni, nj) in enumerate(elems_parsed)
                if ni > max_node or nj > max_node or ni < 0 or nj < 0]
+        zero_len = []
+        duplicate = []
+        seen = set()
+        for i, (ni, nj) in enumerate(elems_parsed):
+            if 0 <= ni <= max_node and 0 <= nj <= max_node:
+                if ni == nj or math.hypot(nodes_parsed[nj][0]-nodes_parsed[ni][0], nodes_parsed[nj][1]-nodes_parsed[ni][1]) < 1e-9:
+                    zero_len.append(i)
+                key = tuple(sorted((ni, nj)))
+                if key in seen:
+                    duplicate.append(i)
+                seen.add(key)
+        bad_supports = [nid for nid in fixed_dofs_ui if nid < 0 or nid > max_node]
+        bad_udl = []
+        bad_span = []
+        elem_lengths = [None] * len(elems_parsed)
+        for i, (ni, nj) in enumerate(elems_parsed):
+            if 0 <= ni <= max_node and 0 <= nj <= max_node:
+                elem_lengths[i] = math.hypot(nodes_parsed[nj][0]-nodes_parsed[ni][0], nodes_parsed[nj][1]-nodes_parsed[ni][1])
+        for spec in member_loads_parsed:
+            eid = spec["element"]
+            if eid < 0 or eid >= len(elems_parsed):
+                bad_udl.append(eid)
+                continue
+            L = elem_lengths[eid]
+            if L is None:
+                continue
+            if spec["type"] == "UDL":
+                b = L if spec.get("b") is None else spec["b"]
+                if spec["a"] < 0 or b > L or b <= spec["a"]:
+                    bad_span.append(f"E{eid+1} UDL span must satisfy 0 ≤ start < end ≤ {L:.3f} m")
+            elif spec["x"] < 0 or spec["x"] > L:
+                bad_span.append(f"E{eid+1} point-load position must satisfy 0 ≤ x ≤ {L:.3f} m")
+        bad_loads = [(nid, ld) for nid, ldm in nodal_loads_parsed.items() for ld in ldm if nid < 0 or nid > max_node or ld not in (0, 1, 2)]
         if bad:
             for i, ni, nj in bad:
                 st.error(f"🚨 Element E{i+1} references node {max(ni,nj)+1} but only "
                          f"{len(nodes_parsed)} nodes exist (N1–N{len(nodes_parsed)}).")
+            st.stop()
+        if zero_len:
+            st.error("🚨 Zero-length elements detected: " + ", ".join(f"E{i+1}" for i in zero_len))
+            st.stop()
+        if bad_supports:
+            st.error("🚨 Support references invalid node(s): " + ", ".join(f"N{n+1}" for n in bad_supports))
+            st.stop()
+        if duplicate:
+            st.warning("⚠️ Duplicate connectivity detected for: " + ", ".join(f"E{i+1}" for i in duplicate))
+        if bad_udl:
+            st.error("🚨 Member load references invalid element(s): " + ", ".join(f"E{i+1}" for i in bad_udl))
+            st.stop()
+        if bad_span:
+            for msg in bad_span:
+                st.error(f"🚨 {msg}")
+            st.stop()
+        if bad_loads:
+            st.error("🚨 Nodal load references invalid node or DOF. Valid DOFs are 0=u, 1=v, 2=θ.")
             st.stop()
 
         with st.spinner("Assembling stiffness matrices and solving…"):
             try:
                 st.session_state.result = run_dsm(
                     nodes_parsed, elems_parsed, fixed_dofs_ui,
-                    nodal_loads_parsed, E_val, A_val, I_val)
+                    nodal_loads_parsed, member_loads_parsed, E_val, A_val, I_val)
             except ValueError as err:
                 st.error(f"🚨 {err}")
                 st.stop()
@@ -684,13 +1105,16 @@ if run_btn:
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown("""
 <h1 style='text-align:center; font-family:Courier New; color:#1e40af; letter-spacing:2px;'>
-  🏗️ 2D FRAME ANALYZER — DIRECT STIFFNESS METHOD
+  🏗️ 2D / PLANE FRAME ANALYZER — DIRECT STIFFNESS METHOD
 </h1>
 <p style='text-align:center; color:#475569; font-family:Courier New; font-size:14px;'>
-  Glass-Box Educational Tool &nbsp;|&nbsp; B.Tech / M.Tech Structural Analysis
+  Professional Plane-Frame Analysis &nbsp;|&nbsp; DSM Glass-Box Educational Tool
 </p>
 """, unsafe_allow_html=True)
 st.divider()
+
+for warning in preview_warnings:
+    st.warning(f"⚠️ {warning}")
 
 res = st.session_state.result
 
@@ -698,7 +1122,7 @@ if res is None:
     # ── Welcome screen ─────────────────────────────────────────
     fig_welcome = draw_frame(
         nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
-        elem_labels=elem_labels_p, node_labels=True)
+        member_loads=member_loads_parsed, elem_labels=elem_labels_p, node_labels=True)
     st.pyplot(fig_welcome, width="stretch")
     plt.close(fig_welcome) 
     st.caption("Select a preset in the sidebar and click **🚀 Run DSM Analysis** to begin")
@@ -778,7 +1202,7 @@ for i, (col, name) in enumerate(zip(tab_cols, STEP_NAMES)):
     with col:
         btn_type = "primary" if i == st.session_state.step else "secondary"
         if st.button(name.split("·")[0].strip(), key=f"tab_{i}",
-                     use_container_width=True, type=btn_type):
+                     width="stretch", type=btn_type):
             st.session_state.step = i
 
 st.progress((st.session_state.step) / (len(STEP_NAMES)-1))
@@ -786,13 +1210,13 @@ st.progress((st.session_state.step) / (len(STEP_NAMES)-1))
 # Prev / Next
 nav_c1, nav_mid, nav_c2 = st.columns([1, 6, 1])
 with nav_c1:
-    if st.button("◀ Prev", use_container_width=True) and st.session_state.step > 0:
+    if st.button("◀ Prev", width="stretch") and st.session_state.step > 0:
         st.session_state.step -= 1; st.rerun()
 with nav_mid:
     st.markdown(f"<h3 style='text-align:center;margin:0;'>{STEP_NAMES[st.session_state.step]}</h3>",
                 unsafe_allow_html=True)
 with nav_c2:
-    if st.button("Next ▶", use_container_width=True) and st.session_state.step < len(STEP_NAMES)-1:
+    if st.button("Next ▶", width="stretch") and st.session_state.step < len(STEP_NAMES)-1:
         st.session_state.step += 1; st.rerun()
 
 st.divider()
@@ -811,8 +1235,8 @@ if step == 0:
     col_v, col_t = st.columns([1.4, 1])
     with col_v:
         fig0 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
-                          elem_labels=elem_labels_p)
-        st.pyplot(fig0, use_container_width=True)
+                          member_loads=member_loads_parsed, elem_labels=elem_labels_p)
+        st.pyplot(fig0, width="stretch")
 
     with col_t:
         st.markdown("<div class='step-card'>", unsafe_allow_html=True)
@@ -823,7 +1247,7 @@ if step == 0:
         st.markdown("**📍 Nodes**")
         node_rows = [{"ID": f"N{i+1}", "x (m)": f"{x:.3f}", "y (m)": f"{y:.3f}"}
                      for i,(x,y) in enumerate(nodes_parsed)]
-        st.dataframe(pd.DataFrame(node_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(node_rows), width="stretch", hide_index=True)
 
         st.markdown("**🔗 Elements**")
         elem_rows = []
@@ -831,20 +1255,27 @@ if step == 0:
             elem_rows.append({"ID":f"E{i+1}", "Label":lbl, "Node i":f"N{e['ni']+1}",
                               "Node j":f"N{e['nj']+1}", "L (m)":f"{e['L']:.3f}",
                               "α (°)":f"{e['alpha_deg']:.2f}"})
-        st.dataframe(pd.DataFrame(elem_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(elem_rows), width="stretch", hide_index=True)
 
         st.markdown("**⚙️ Material / Section (same for all elements)**")
         st.dataframe(pd.DataFrame([{"E (kN/m²)": f"{E_val:.3e}", "A (m²)": f"{A_val:.4f}",
                                     "I (m⁴)": f"{I_val:.6f}"}]),
-                     use_container_width=True, hide_index=True)
+                     width="stretch", hide_index=True)
 
-        st.markdown("**➡️ Nodal Loads**")
+        st.markdown("**➡️ Applied Loads**")
         dof_names = {0:"Fx (kN)", 1:"Fy (kN)", 2:"M (kN·m)"}
-        lrows = [{"Node":f"N{nid+1}", "Load":dof_names[ld], "Value":f"{val:.1f} kN"}
+        lrows = [{"Source":"Node", "ID":f"N{nid+1}", "Load":dof_names[ld], "Value":f"{val:.1f}"}
                  for nid, ldmap in nodal_loads_parsed.items()
                  for ld, val in ldmap.items()]
-        st.dataframe(pd.DataFrame(lrows if lrows else [{"Note":"No nodal loads"}]),
-                     use_container_width=True, hide_index=True)
+        for spec in normalize_member_loads(member_loads_parsed, [e["L"] for e in ed]):
+            if spec["type"] == "Point":
+                lrows.append({"Source":"Member Point", "ID":f"E{spec['element']+1}",
+                              "Load":f"P↓ at x={spec['x']:.3f} m", "Value":f"{spec['P']:.2f} kN"})
+            else:
+                lrows.append({"Source":"Member UDL", "ID":f"E{spec['element']+1}",
+                              "Load":f"w↓ from {spec['a']:.3f}–{spec['b']:.3f} m", "Value":f"{spec['w']:.2f} kN/m"})
+        st.dataframe(pd.DataFrame(lrows if lrows else [{"Note":"No applied loads"}]),
+                     width="stretch", hide_index=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -853,8 +1284,8 @@ elif step == 1:
     col_v, col_t = st.columns([1.4, 1])
     with col_v:
         fig1 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
-                          U=res["U"], dof_map=res["dof_map"], show_dofs=True, show_loads=False)
-        st.pyplot(fig1, use_container_width=True)
+                          member_loads=member_loads_parsed, U=res["U"], dof_map=res["dof_map"], show_dofs=True, show_loads=False)
+        st.pyplot(fig1, width="stretch")
 
     with col_t:
         st.markdown("<div class='step-card'>", unsafe_allow_html=True)
@@ -890,7 +1321,7 @@ Total DOFs = 3 × nNodes
             if val == "FREE":  return "background-color:#dcfce7;color:#166534"
             return ""
         styled_dofs = df_dofs.style.map(color_bc, subset=["u BC","v BC","θ BC"])
-        st.dataframe(styled_dofs, use_container_width=True, hide_index=True)
+        st.dataframe(styled_dofs, width="stretch", hide_index=True)
 
         st.markdown(f"""
 **Summary:**
@@ -997,7 +1428,7 @@ elif step == 3:
             color="#7c3aed", fontsize=10, fontfamily="monospace",
             bbox=dict(boxstyle="round", fc="#ffffff", ec="#7c3aed"),
         )
-        st.pyplot(fig3, use_container_width=True)
+        st.pyplot(fig3, width="stretch")
 
 
 # ── Step 4: Global Element Stiffness ──────────────────────────────────────────
@@ -1030,7 +1461,7 @@ elif step == 4:
     dm_rows = [{"Local DOF": f"u{e['ni']+1}/v{e['ni']+1}/θ{e['ni']+1}/u{e['nj']+1}/v{e['nj']+1}/θ{e['nj']+1}".split("/")[li],
                 "Global Index": g}
                for li, g in enumerate(e["gdofs"])]
-    st.dataframe(pd.DataFrame(dm_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(dm_rows), width="stretch", hide_index=True)
 
 
 # ── Step 5: Assembly ──────────────────────────────────────────────────────────
@@ -1112,10 +1543,14 @@ elif step == 7:
     col_v, col_t = st.columns([1.4, 1])
     with col_v:
         fig7 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
-                          U=res["U"], dof_map=res["dof_map"],
+                          member_loads=member_loads_parsed, U=res["U"], dof_map=res["dof_map"],
                           show_deformed=True, show_loads=True)
-        st.pyplot(fig7, use_container_width=True)
-        st.caption("— Deformed shape (dashed red, exaggerated scale)")
+        st.pyplot(fig7, width="stretch")
+        st.caption("— Nodal deformed shape (dashed red, exaggerated scale)")
+        fig_def = draw_deflection_diagram(nodes_parsed, elems_parsed, res["member_results"], elem_labels=elem_labels_p)
+        st.pyplot(fig_def, width="stretch")
+        plt.close(fig_def)
+        st.caption("— Smooth member deflection diagram using plane-frame interpolation functions")
 
     with col_t:
         st.markdown("<div class='step-card'>", unsafe_allow_html=True)
@@ -1149,7 +1584,7 @@ elif step == 7:
             return "background-color:#dcfce7;color:#166534" if val=="SOLVED" else \
                    "background-color:#f1f5f9;color:#475569"
         st.dataframe(df_U.style.map(col_status, subset=["Status"]),
-                     use_container_width=True, hide_index=True)
+                     width="stretch", hide_index=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -1164,7 +1599,7 @@ elif step == 8:
         st.markdown("""
 <div class='formula-box'>
   {u_local} = [T] · {u_global_element}     ← transform displacements to local
-  {f_local} = [k] · {u_local}              ← apply local stiffness
+  {f_local} = [k] · {u_local} − {p_fixed}  ← include equivalent UDL fixed-end effects
 
   Sign convention (local x = member axis, +ve left to right):
     N  — axial  (+ve = tension)
@@ -1183,7 +1618,7 @@ elif step == 8:
             "N_j (kN)": f"{mr['N_j']:.3f}", "V_j (kN)": f"{mr['V_j']:.3f}",
             "M_j (kN·m)": f"{mr['M_j']:.3f}",
         })
-    st.dataframe(pd.DataFrame(force_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(force_rows), width="stretch", hide_index=True)
 
     # Local force vectors for selected element
     st.divider()
@@ -1203,12 +1638,12 @@ elif step == 8:
         loc_lbls = [f"u'{e['ni']+1}", f"v'{e['ni']+1}", f"θ'{e['ni']+1}", f"u'{e['nj']+1}", f"v'{e['nj']+1}", f"θ'{e['nj']+1}"]
         show_vector(mr["u_local"], labels=loc_lbls, caption="Local displacements (m / rad)")
     with c3:
-        st.markdown("**{f_local} = [k]·{u_local}**")
+        st.markdown("**{f_local} = [k]·{u_local} − {p_fixed}**")
         show_vector(mr["f_local"], labels=loc_lbls, caption="Local end forces (kN / kN·m)")
 
     st.divider()
-    fig_bmd = draw_bmd_sfd(nodes_parsed, elems_parsed, res["member_results"], elem_labels_p)
-    st.pyplot(fig_bmd, use_container_width=True)
+    fig_bmd = draw_bmd_sfd(nodes_parsed, elems_parsed, res["member_results"], elem_labels_p, member_loads_parsed)
+    st.pyplot(fig_bmd, width="stretch")
 
 
 # ── Step 9: Reactions ─────────────────────────────────────────────────────────
@@ -1216,10 +1651,10 @@ elif step == 9:
     col_v, col_t = st.columns([1.4, 1])
     with col_v:
         fig9 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed,
-                          U=res["U"], dof_map=res["dof_map"],
+                          member_loads=member_loads_parsed, U=res["U"], dof_map=res["dof_map"],
                           show_deformed=True, show_reactions=True,
                           reactions=res["reactions"])
-        st.pyplot(fig9, use_container_width=True)
+        st.pyplot(fig9, width="stretch")
 
     with col_t:
         st.markdown("<div class='step-card'>", unsafe_allow_html=True)
@@ -1249,7 +1684,7 @@ elif step == 9:
             nid  = gi // 3; ld = gi % 3
             rx_rows.append({"Node": f"N{nid+1}", "DOF": f"d{gi}",
                             "Type": dof_names_map[ld], "Reaction": f"{val:.4f}"})
-        st.dataframe(pd.DataFrame(rx_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rx_rows), width="stretch", hide_index=True)
 
         st.markdown("**⚖️ Global Equilibrium Check**")
         eq = res["eq_check"]
@@ -1267,10 +1702,8 @@ elif step == 9:
         # Applied load summary vs reactions
         st.divider()
         st.markdown("**📋 Load vs. Reaction Summary**")
-        total_Fx = sum(v for nid, ldm in nodal_loads_parsed.items()
-                       for ld, v in ldm.items() if ld == 0)
-        total_Fy = sum(v for nid, ldm in nodal_loads_parsed.items()
-                       for ld, v in ldm.items() if ld == 1)
+        total_Fx = float(sum(res["F"][0::3]))
+        total_Fy = float(sum(res["F"][1::3]))
         rx_Fx = sum(v for gi, v in res["reactions"].items() if gi % 3 == 0)
         rx_Fy = sum(v for gi, v in res["reactions"].items() if gi % 3 == 1)
         st.markdown(f"""
@@ -1307,7 +1740,7 @@ with ref_c3:
 **🚀 Deploy This App**
 ```bash
 pip install streamlit numpy pandas matplotlib
-streamlit run dsm_2d_frame.py
+streamlit run app.py
 ```
 Or push to GitHub and connect at  
 [share.streamlit.io](https://share.streamlit.io)
