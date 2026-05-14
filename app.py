@@ -135,9 +135,12 @@ def normalize_member_loads(member_loads, elem_lengths=None):
         return specs
     if isinstance(member_loads, dict):
         for eid, w in member_loads.items():
+            eid = int(eid)
             if abs(float(w)) > 1e-12:
-                L = elem_lengths[eid] if elem_lengths and eid < len(elem_lengths) else None
-                specs.append({"element": int(eid), "type": "UDL", "w": float(w),
+                L = elem_lengths[eid] if elem_lengths and 0 <= eid < len(elem_lengths) else None
+                if L is None:
+                    continue
+                specs.append({"element": eid, "type": "UDL", "w": float(w),
                               "a": 0.0, "b": L, "P": 0.0, "x": 0.0})
         return specs
     for row in member_loads:
@@ -462,6 +465,11 @@ def classify_support(fixed_ldofs):
     if 0 in fixed_ldofs and 1 in fixed_ldofs: return "pin"
     return "roller"
 
+
+def _valid_node_index(nodes, idx):
+    return isinstance(idx, (int, np.integer)) and 0 <= int(idx) < len(nodes)
+
+
 def draw_frame(nodes, elements, fixed_dofs, nodal_loads, member_loads=None,
                U=None, dof_map=None, reactions=None,
                scale=0.3, show_dofs=False, show_loads=True,
@@ -474,17 +482,25 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads, member_loads=None,
     for spine in ax.spines.values():
         spine.set_edgecolor("#cbd5e1")
 
+    if not nodes:
+        ax.text(0.5, 0.5, "No valid nodes to display", transform=ax.transAxes,
+                ha="center", va="center", color="#991b1b", fontfamily="monospace")
+        ax.set_axis_off()
+        return fig
+
     xs = [n[0] for n in nodes]; ys = [n[1] for n in nodes]
     span = max(max(xs)-min(xs), max(ys)-min(ys), 1.0)
     arrowsc = span * 0.08   # arrow scale
+    valid_elements = [(idx, int(ni), int(nj)) for idx, (ni, nj) in enumerate(elements)
+                      if _valid_node_index(nodes, ni) and _valid_node_index(nodes, nj)]
 
     # ── Draw elements ──────────────────────────────────────────
     colors = ["#2563eb","#d97706","#7c3aed","#059669","#dc2626"]
-    for idx, (ni, nj) in enumerate(elements):
+    for idx, ni, nj in valid_elements:
         xi, yi = nodes[ni]; xj, yj = nodes[nj]
         col = colors[idx % len(colors)]
         ax.plot([xi, xj], [yi, yj], color=col, lw=3, solid_capstyle="round", zorder=3)
-        if elem_labels:
+        if elem_labels and idx < len(elem_labels):
             mx, my = (xi+xj)/2, (yi+yj)/2
             ax.text(mx, my, elem_labels[idx], color=col, fontsize=8,
                     ha="center", va="bottom", fontfamily="monospace",
@@ -494,7 +510,9 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads, member_loads=None,
     if show_deformed and U is not None and dof_map is not None:
         disp_max = max(abs(U)) if max(abs(U)) > 1e-12 else 1
         sc = scale * span / disp_max
-        for ni, nj in elements:
+        for _, ni, nj in valid_elements:
+            if ni not in dof_map or nj not in dof_map:
+                continue
             xi, yi = nodes[ni]; xj, yj = nodes[nj]
             ui = U[dof_map[ni][:2]]; uj = U[dof_map[nj][:2]]
             ax.plot([xi+sc*ui[0], xj+sc*uj[0]],
@@ -511,6 +529,8 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads, member_loads=None,
 
     # ── Draw supports ─────────────────────────────────────────
     for nid, ldofs in fixed_dofs.items():
+        if not _valid_node_index(nodes, nid):
+            continue
         x, y = nodes[nid]
         stype = classify_support(ldofs)
         if stype == "fixed":
@@ -533,13 +553,14 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads, member_loads=None,
 
     # ── Draw loads ────────────────────────────────────────────
     if show_loads:
-        lengths = [max(math.hypot(nodes[nj][0]-nodes[ni][0], nodes[nj][1]-nodes[ni][1]), 1e-9)
-                   for ni, nj in elements]
+        lengths = [None] * len(elements)
+        for idx, ni, nj in valid_elements:
+            lengths[idx] = max(math.hypot(nodes[nj][0]-nodes[ni][0], nodes[nj][1]-nodes[ni][1]), 1e-9)
         specs_by_element = {i: [] for i in range(len(elements))}
         for spec in normalize_member_loads(member_loads, lengths):
-            if 0 <= spec["element"] < len(elements):
+            if 0 <= spec["element"] < len(elements) and lengths[spec["element"]] is not None:
                 specs_by_element[spec["element"]].append(spec)
-        for idx, (ni, nj) in enumerate(elements):
+        for idx, ni, nj in valid_elements:
             xi, yi = nodes[ni]; xj, yj = nodes[nj]
             L = lengths[idx]
             alpha = math.atan2(yj-yi, xj-xi)
@@ -572,6 +593,8 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads, member_loads=None,
                             bbox=dict(boxstyle="round,pad=0.2", fc="#fffbeb", ec="#f59e0b", lw=0.8))
 
         for nid, ldmap in nodal_loads.items():
+            if not _valid_node_index(nodes, nid):
+                continue
             x, y = nodes[nid]
             for ld, val in ldmap.items():
                 if ld == 0:  # Fx
@@ -592,6 +615,8 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads, member_loads=None,
         colors_dof = ["#1d4ed8","#15803d","#7c3aed"]
         labels_dof = ["u","v","θ"]
         for nid, gdofs in dof_map.items():
+            if not _valid_node_index(nodes, nid):
+                continue
             x, y = nodes[nid]
             offsets = [(arrowsc*1.1, 0),(0, arrowsc*1.1),(arrowsc*0.6, arrowsc*0.6)]
             for d, (dx, dy) in enumerate(offsets):
@@ -604,6 +629,8 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads, member_loads=None,
     # ── Draw reactions ────────────────────────────────────────
     if show_reactions and reactions is not None and dof_map is not None:
         for nid, ldofs in fixed_dofs.items():
+            if not _valid_node_index(nodes, nid) or nid not in dof_map:
+                continue
             x, y = nodes[nid]
             for ld in ldofs:
                 gi = dof_map[nid][ld]
@@ -906,27 +933,41 @@ def _optional_float(value, default=0.0):
         return default
     return float(value)
 
-nodes_parsed = [
-    (float(r["x (m)"]), float(r["y (m)"]))
-    for _, r in node_df.iterrows()
-    if _is_valid_row(r, ["x (m)", "y (m)"])
-]
-elems_parsed = [
-    (int(r["Node i"]) - 1, int(r["Node j"]) - 1)
-    for _, r in elem_df.iterrows()
-    if _is_valid_row(r, ["Node i", "Node j"])
-]
-elem_labels_p = [
-    str(r["Label"]) if _is_valid_row(r, ["Label"]) else f"E{i+1}"
-    for i, (_, r) in enumerate(elem_df.iterrows())
-    if _is_valid_row(r, ["Node i", "Node j"])
-]
+
+def _optional_int(value, default=None):
+    if value is None or pd.isna(value) or str(value).strip() in ("", "None", "nan"):
+        return default
+    return int(float(value))
+
+
+nodes_parsed = []
+for _, r in node_df.iterrows():
+    if _is_valid_row(r, ["x (m)", "y (m)"]):
+        try:
+            nodes_parsed.append((float(r["x (m)"]), float(r["y (m)"])))
+        except (TypeError, ValueError):
+            pass
+
+elems_parsed = []
+elem_labels_p = []
+for i, (_, r) in enumerate(elem_df.iterrows()):
+    if _is_valid_row(r, ["Node i", "Node j"]):
+        try:
+            elems_parsed.append((_optional_int(r["Node i"]) - 1, _optional_int(r["Node j"]) - 1))
+            elem_labels_p.append(str(r["Label"]) if _is_valid_row(r, ["Label"]) else f"E{i+1}")
+        except (TypeError, ValueError):
+            pass
 
 nodal_loads_parsed = {}
 for _, r in load_df.iterrows():
     if not _is_valid_row(r, ["Node", "DOF (0=u,1=v,2=θ)", "Value (kN or kN·m)"]):
         continue
-    nid = int(r["Node"]) - 1; ld = int(r["DOF (0=u,1=v,2=θ)"]); val = float(r["Value (kN or kN·m)"])
+    try:
+        nid = _optional_int(r["Node"]) - 1
+        ld = _optional_int(r["DOF (0=u,1=v,2=θ)"])
+        val = float(r["Value (kN or kN·m)"])
+    except (TypeError, ValueError):
+        continue
     if abs(val) > 1e-10:
         nodal_loads_parsed.setdefault(nid, {})[ld] = val
 
@@ -937,19 +978,45 @@ for _, r in load_spec_df.iterrows():
     raw_elem = str(r["Element"]).strip().upper().replace("E", "")
     if not raw_elem:
         continue
-    eid = int(float(raw_elem)) - 1
-    load_type = _clean_load_type(r["Type"])
-    load_value = float(r["Load ↓"])
+    try:
+        eid = int(float(raw_elem)) - 1
+        load_type = _clean_load_type(r["Type"])
+        load_value = float(r["Load ↓"])
+    except (TypeError, ValueError):
+        continue
     if abs(load_value) <= 1e-10:
         continue
     if load_type == "Point":
-        x = _optional_float(r.get("Position x"), 0.0)
+        try:
+            x = _optional_float(r.get("Position x"), 0.0)
+        except (TypeError, ValueError):
+            continue
         member_loads_parsed.append({"element": eid, "type": "Point", "P": load_value, "x": x})
     else:
-        a = _optional_float(r.get("Start x"), 0.0)
-        raw_b = r.get("End x")
+        try:
+            a = _optional_float(r.get("Start x"), 0.0)
+            raw_b = r.get("End x")
+            b = None if raw_b is None or pd.isna(raw_b) or str(raw_b).strip() == "" else float(raw_b)
+        except (TypeError, ValueError):
+            continue
         member_loads_parsed.append({"element": eid, "type": "UDL", "w": load_value,
-                                    "a": a, "b": None if raw_b is None or pd.isna(raw_b) or str(raw_b).strip() == "" else float(raw_b)})
+                                    "a": a, "b": b})
+
+preview_warnings = []
+if nodes_parsed:
+    max_preview_node = len(nodes_parsed) - 1
+    invalid_preview_elems = [f"E{i+1}" for i, (ni, nj) in enumerate(elems_parsed)
+                             if ni < 0 or nj < 0 or ni > max_preview_node or nj > max_preview_node]
+    if invalid_preview_elems:
+        preview_warnings.append(
+            "Invalid element connectivity: " + ", ".join(invalid_preview_elems) +
+            f". Fix node references before running analysis (valid range N1–N{len(nodes_parsed)})."
+        )
+    invalid_preview_supports = [f"N{nid+1}" for nid in fixed_dofs_ui if nid < 0 or nid > max_preview_node]
+    if invalid_preview_supports:
+        preview_warnings.append("Invalid support rows ignored in preview: " + ", ".join(invalid_preview_supports))
+else:
+    preview_warnings.append("No valid node coordinates are available to preview.")
 
 if run_btn:
     if len(nodes_parsed) < 2:
@@ -975,16 +1042,21 @@ if run_btn:
                 if key in seen:
                     duplicate.append(i)
                 seen.add(key)
+        bad_supports = [nid for nid in fixed_dofs_ui if nid < 0 or nid > max_node]
         bad_udl = []
         bad_span = []
-        elem_lengths = [math.hypot(nodes_parsed[nj][0]-nodes_parsed[ni][0], nodes_parsed[nj][1]-nodes_parsed[ni][1])
-                        for ni, nj in elems_parsed]
+        elem_lengths = [None] * len(elems_parsed)
+        for i, (ni, nj) in enumerate(elems_parsed):
+            if 0 <= ni <= max_node and 0 <= nj <= max_node:
+                elem_lengths[i] = math.hypot(nodes_parsed[nj][0]-nodes_parsed[ni][0], nodes_parsed[nj][1]-nodes_parsed[ni][1])
         for spec in member_loads_parsed:
             eid = spec["element"]
             if eid < 0 or eid >= len(elems_parsed):
                 bad_udl.append(eid)
                 continue
             L = elem_lengths[eid]
+            if L is None:
+                continue
             if spec["type"] == "UDL":
                 b = L if spec.get("b") is None else spec["b"]
                 if spec["a"] < 0 or b > L or b <= spec["a"]:
@@ -999,6 +1071,9 @@ if run_btn:
             st.stop()
         if zero_len:
             st.error("🚨 Zero-length elements detected: " + ", ".join(f"E{i+1}" for i in zero_len))
+            st.stop()
+        if bad_supports:
+            st.error("🚨 Support references invalid node(s): " + ", ".join(f"N{n+1}" for n in bad_supports))
             st.stop()
         if duplicate:
             st.warning("⚠️ Duplicate connectivity detected for: " + ", ".join(f"E{i+1}" for i in duplicate))
@@ -1037,6 +1112,9 @@ st.markdown("""
 </p>
 """, unsafe_allow_html=True)
 st.divider()
+
+for warning in preview_warnings:
+    st.warning(f"⚠️ {warning}")
 
 res = st.session_state.result
 
