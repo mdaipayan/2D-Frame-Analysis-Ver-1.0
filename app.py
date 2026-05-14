@@ -470,13 +470,41 @@ def _valid_node_index(nodes, idx):
     return isinstance(idx, (int, np.integer)) and 0 <= int(idx) < len(nodes)
 
 
+def _structure_figure_size(nodes, base_width=11.0, min_height=5.5, max_height=9.0):
+    """Choose a readable figure height from the model aspect ratio."""
+    if not nodes:
+        return (base_width, min_height)
+    xs = [n[0] for n in nodes]
+    ys = [n[1] for n in nodes]
+    width = max(max(xs) - min(xs), 1.0)
+    height = max(max(ys) - min(ys), 1.0)
+    return (base_width, max(min_height, min(max_height, base_width * height / width)))
+
+
+def _set_adaptive_limits(ax, x_values, y_values, min_span=1.0, margin_ratio=0.12):
+    """Set axis limits around every plotted point so diagrams are not clipped."""
+    xs = [float(x) for x in x_values if np.isfinite(x)]
+    ys = [float(y) for y in y_values if np.isfinite(y)]
+    if not xs or not ys:
+        ax.set_xlim(-0.5, 0.5)
+        ax.set_ylim(-0.5, 0.5)
+        return
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+    xspan = max(xmax - xmin, min_span)
+    yspan = max(ymax - ymin, min_span)
+    pad = max(xspan, yspan) * margin_ratio
+    ax.set_xlim(xmin - pad, xmax + pad)
+    ax.set_ylim(ymin - pad, ymax + pad)
+
+
 def draw_frame(nodes, elements, fixed_dofs, nodal_loads, member_loads=None,
                U=None, dof_map=None, reactions=None,
                scale=0.3, show_dofs=False, show_loads=True,
                show_deformed=False, show_reactions=False,
                elem_labels=None, node_labels=True):
     """Draw the 2D frame with supports, loads, deformed shape, reactions."""
-    fig, ax = plt.subplots(figsize=(11, 8), facecolor="#f8fafc")
+    fig, ax = plt.subplots(figsize=_structure_figure_size(nodes), facecolor="#f8fafc")
     ax.set_facecolor("#ffffff")
     ax.tick_params(colors="#334155")
     for spine in ax.spines.values():
@@ -493,6 +521,8 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads, member_loads=None,
     arrowsc = span * 0.08   # arrow scale
     valid_elements = [(idx, int(ni), int(nj)) for idx, (ni, nj) in enumerate(elements)
                       if _valid_node_index(nodes, ni) and _valid_node_index(nodes, nj)]
+    plot_x = list(xs)
+    plot_y = list(ys)
 
     # ── Draw elements ──────────────────────────────────────────
     colors = ["#2563eb","#d97706","#7c3aed","#059669","#dc2626"]
@@ -515,9 +545,10 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads, member_loads=None,
                 continue
             xi, yi = nodes[ni]; xj, yj = nodes[nj]
             ui = U[dof_map[ni][:2]]; uj = U[dof_map[nj][:2]]
-            ax.plot([xi+sc*ui[0], xj+sc*uj[0]],
-                    [yi+sc*ui[1], yj+sc*uj[1]],
-                    color="#dc2626", lw=2, ls="--", zorder=4, alpha=0.85)
+            dxs = [xi+sc*ui[0], xj+sc*uj[0]]
+            dys = [yi+sc*ui[1], yj+sc*uj[1]]
+            ax.plot(dxs, dys, color="#dc2626", lw=2, ls="--", zorder=4, alpha=0.85)
+            plot_x.extend(dxs); plot_y.extend(dys)
 
     # ── Draw nodes ────────────────────────────────────────────
     for i, (x, y) in enumerate(nodes):
@@ -575,10 +606,15 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads, member_loads=None,
                         xloc = a + (b-a) * k / (n_arrows + 1)
                         t = xloc / L
                         x = xi + t*(xj-xi); y = yi + t*(yj-yi)
-                        ax.annotate("", xy=(x, y), xytext=(x - nx*arrowsc*0.75, y - ny*arrowsc*0.75),
+                        tx, ty = x - nx*arrowsc*0.75, y - ny*arrowsc*0.75
+                        ax.annotate("", xy=(x, y), xytext=(tx, ty),
                                     arrowprops=dict(arrowstyle="->", color="#ea580c", lw=1.4, alpha=0.8))
+                        plot_x.extend([x, tx]); plot_y.extend([y, ty])
                     tm = ((a+b)/2) / L
-                    ax.text(xi + tm*(xj-xi) + nx*arrowsc*0.35, yi + tm*(yj-yi) + ny*arrowsc*0.35,
+                    label_x = xi + tm*(xj-xi) + nx*arrowsc*0.35
+                    label_y = yi + tm*(yj-yi) + ny*arrowsc*0.35
+                    plot_x.append(label_x); plot_y.append(label_y)
+                    ax.text(label_x, label_y,
                             f"w={w:.2g} kN/m", color="#ea580c", fontsize=8,
                             ha="center", fontfamily="monospace",
                             bbox=dict(boxstyle="round,pad=0.2", fc="#fff7ed", ec="#fdba74", lw=0.8))
@@ -586,9 +622,12 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads, member_loads=None,
                     P, xloc = spec["P"], spec["x"]
                     t = xloc / L
                     x = xi + t*(xj-xi); y = yi + t*(yj-yi)
-                    ax.annotate("", xy=(x, y), xytext=(x - nx*arrowsc, y - ny*arrowsc),
+                    tx, ty = x - nx*arrowsc, y - ny*arrowsc
+                    ax.annotate("", xy=(x, y), xytext=(tx, ty),
                                 arrowprops=dict(arrowstyle="-|>", color="#b45309", lw=2.2))
-                    ax.text(x + nx*arrowsc*0.45, y + ny*arrowsc*0.45, f"P={P:.2g} kN",
+                    label_x, label_y = x + nx*arrowsc*0.45, y + ny*arrowsc*0.45
+                    plot_x.extend([x, tx, label_x]); plot_y.extend([y, ty, label_y])
+                    ax.text(label_x, label_y, f"P={P:.2g} kN",
                             color="#b45309", fontsize=8, ha="center", fontfamily="monospace",
                             bbox=dict(boxstyle="round,pad=0.2", fc="#fffbeb", ec="#f59e0b", lw=0.8))
 
@@ -649,10 +688,8 @@ def draw_frame(nodes, elements, fixed_dofs, nodal_loads, member_loads=None,
                     ax.text(x-arrowsc*0.6, y+dy, f"Ry={val:.1f}",
                             color="#dc2626", fontsize=7, ha="right", fontfamily="monospace")
 
-    margin = span * 0.2
-    ax.set_xlim(min(xs)-margin, max(xs)+margin)
-    ax.set_ylim(min(ys)-margin, max(ys)+margin)
-    ax.set_aspect("equal")
+    _set_adaptive_limits(ax, plot_x, plot_y, min_span=span, margin_ratio=0.18)
+    ax.set_aspect("equal", adjustable="box")
     ax.grid(True, color="#e2e8f0", lw=0.5, alpha=0.8)
     ax.set_xlabel("X (m)", color="#475569", fontfamily="monospace")
     ax.set_ylabel("Y (m)", color="#475569", fontfamily="monospace")
@@ -694,7 +731,7 @@ def _local_deflection_at(x, L, u_local):
 
 def draw_bmd_sfd(nodes, elements, member_results, elem_labels=None, member_loads=None):
     """Draw improved bending-moment and shear-force diagrams with point/partial UDL loads."""
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6), facecolor="#f8fafc")
+    fig, axes = plt.subplots(1, 2, figsize=(14, max(6, _structure_figure_size(nodes, base_width=10)[1])), facecolor="#f8fafc")
     titles = ["Bending Moment Diagram (kN·m)", "Shear Force Diagram (kN)"]
     colors = ["#7c3aed", "#0891b2"]
     lengths = [max(math.hypot(nodes[nj][0]-nodes[ni][0], nodes[nj][1]-nodes[ni][1]), 1e-9)
@@ -714,6 +751,8 @@ def draw_bmd_sfd(nodes, elements, member_results, elem_labels=None, member_loads
             spine.set_edgecolor("#cbd5e1")
         ax.set_title(titles[ax_idx], color="#1e40af", fontfamily="monospace", pad=10)
         ax.grid(True, color="#e2e8f0", lw=0.5)
+        axis_x = list(xs)
+        axis_y = list(ys)
 
         for ni, nj in elements:
             ax.plot([nodes[ni][0], nodes[nj][0]], [nodes[ni][1], nodes[nj][1]],
@@ -742,6 +781,8 @@ def draw_bmd_sfd(nodes, elements, member_results, elem_labels=None, member_loads
                 base_x.append(bx); base_y.append(by)
                 pts_x.append(bx + scale*val*perp[0]); pts_y.append(by + scale*val*perp[1])
 
+            axis_x.extend(base_x + pts_x)
+            axis_y.extend(base_y + pts_y)
             col = colors[ax_idx]
             ax.fill(base_x + pts_x[::-1], base_y + pts_y[::-1], color=col, alpha=0.22)
             ax.plot(pts_x, pts_y, color=col, lw=2)
@@ -749,17 +790,57 @@ def draw_bmd_sfd(nodes, elements, member_results, elem_labels=None, member_loads
                               (sample_x[int(np.argmax(np.abs(values)))], values[int(np.argmax(np.abs(values)))])]:
                 t = xloc / L
                 bx = xi + t*(xj-xi); by = yi + t*(yj-yi)
-                ax.text(bx + scale*val*perp[0]*1.12, by + scale*val*perp[1]*1.12,
+                label_x = bx + scale*val*perp[0]*1.12
+                label_y = by + scale*val*perp[1]*1.12
+                axis_x.append(label_x); axis_y.append(label_y)
+                ax.text(label_x, label_y,
                         f"{val:.1f}", color=col, fontsize=7, ha="center", fontfamily="monospace")
             if elem_labels:
                 ax.text((xi+xj)/2, (yi+yj)/2, elem_labels[idx], color="#475569",
                         fontsize=7, ha="center", va="bottom", fontfamily="monospace")
 
-        ax.set_aspect("equal")
-        margin = span * 0.25
-        ax.set_xlim(min(xs)-margin, max(xs)+margin)
-        ax.set_ylim(min(ys)-margin, max(ys)+margin)
+        ax.set_aspect("equal", adjustable="box")
+        _set_adaptive_limits(ax, axis_x, axis_y, min_span=span, margin_ratio=0.20)
 
+    plt.tight_layout()
+    return fig
+
+
+def draw_deflection_diagram(nodes, elements, member_results, scale=0.3, elem_labels=None):
+    """Draw a smooth plane-frame deflection diagram using beam shape functions."""
+    fig, ax = plt.subplots(figsize=_structure_figure_size(nodes, base_width=11.0), facecolor="#f8fafc")
+    ax.set_facecolor("#ffffff")
+    xs = [n[0] for n in nodes]; ys = [n[1] for n in nodes]
+    span = max(max(xs)-min(xs), max(ys)-min(ys), 1.0)
+    axis_x = list(xs)
+    axis_y = list(ys)
+    max_disp = max(max(abs(mr["u_local"][i]) for i in [0, 1, 3, 4]) for mr in member_results) or 1.0
+    sc = scale * span / max(max_disp, 1e-12)
+    for idx, ((ni, nj), mr) in enumerate(zip(elements, member_results)):
+        xi, yi = nodes[ni]; xj, yj = nodes[nj]
+        L = max(math.hypot(xj-xi, yj-yi), 1e-9)
+        alpha = math.atan2(yj-yi, xj-xi)
+        c, s = math.cos(alpha), math.sin(alpha)
+        base_x = [xi + t*(xj-xi) for t in np.linspace(0, 1, 30)]
+        base_y = [yi + t*(yj-yi) for t in np.linspace(0, 1, 30)]
+        ax.plot(base_x, base_y, color="#94a3b8", lw=1.2)
+        dxs, dys = [], []
+        for xloc in np.linspace(0, L, 50):
+            u, v = _local_deflection_at(float(xloc), L, mr["u_local"])
+            gx = xi + (xloc/L)*(xj-xi) + sc*(c*u - s*v)
+            gy = yi + (xloc/L)*(yj-yi) + sc*(s*u + c*v)
+            dxs.append(gx); dys.append(gy)
+        ax.plot(dxs, dys, color="#dc2626", lw=2.4)
+        axis_x.extend(base_x + dxs)
+        axis_y.extend(base_y + dys)
+        if elem_labels:
+            ax.text((xi+xj)/2, (yi+yj)/2, elem_labels[idx], color="#475569",
+                    fontsize=8, ha="center", fontfamily="monospace")
+    ax.scatter(xs, ys, s=45, color="#1e293b", zorder=3)
+    ax.set_title("Deflection Diagram (smooth, exaggerated)", color="#1e40af", fontfamily="monospace")
+    ax.grid(True, color="#e2e8f0", lw=0.5)
+    ax.set_aspect("equal", adjustable="box")
+    _set_adaptive_limits(ax, axis_x, axis_y, min_span=span, margin_ratio=0.20)
     plt.tight_layout()
     return fig
 
