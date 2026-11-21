@@ -1129,6 +1129,7 @@ for i, (col, name) in enumerate(zip(tab_cols, STEP_NAMES)):
     with col:
         if st.button(name.split("·")[0].strip(), key=f"tab_{i}", use_container_width=True, type="primary" if i == st.session_state.step else "secondary"):
             st.session_state.step = i
+            st.rerun()
 
 st.progress(st.session_state.step / (len(STEP_NAMES) - 1))
 nav_c1, nav_mid, nav_c2 = st.columns([1, 6, 1])
