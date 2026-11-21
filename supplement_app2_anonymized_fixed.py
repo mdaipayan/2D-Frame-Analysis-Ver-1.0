@@ -620,6 +620,188 @@ def draw_frame(
     return fig
 
 
+def draw_udl_fef_theory(w: float, L: float, E: float = 200e6, A: float = 0.01, I: float = 1e-4):
+    """Four-stage picture of how DSM handles a UDL, for a propped cantilever
+    (fixed at i, roller at j) of span L under UDL w (local y, negative = down).
+    Returns (fig, data) where data holds the vectors shown in the figure."""
+    from matplotlib.patches import FancyArrowPatch, Rectangle, Polygon
+
+    res_ex = run_dsm([(0.0, 0.0), (L, 0.0)], [(0, 1)], {0: [0, 1, 2], 1: [0, 1]}, {}, E, A, I, udl_loads={0: w})
+    mr = res_ex["member_results"][0]
+    fef = mr["fef_local"]                 # equivalent nodal loads (what enters {F})
+    f_el = mr["f_local_elastic"]          # k·T·u
+    f = mr["f_local"]                     # f_el − FEF
+    u = mr["u_local"]
+
+    C_LOAD, C_LOCK, C_EQ, C_EL, C_FIN = "#f59e0b", "#ea580c", "#7c3aed", "#2563eb", "#059669"
+    fig = plt.figure(figsize=(15, 8.4), facecolor="#f8fafc")
+    gs = fig.add_gridspec(2, 5, width_ratios=[1, 0.12, 1, 0.12, 1], height_ratios=[0.78, 1], hspace=0.38, wspace=0.05, top=0.90, bottom=0.11, left=0.03, right=0.99)
+    top = [fig.add_subplot(gs[0, c]) for c in (0, 2, 4)]
+    bot = [fig.add_subplot(gs[1, c]) for c in (0, 2, 4)]
+    ops = [fig.add_subplot(gs[r, c]) for r in (0, 1) for c in (1, 3)]
+    for ax in ops:
+        ax.axis("off")
+    for ax, s in zip(ops, ["→", "→", "+", "="]):
+        ax.text(0.5, 0.5, s, fontsize=30, ha="center", va="center", color="#334155", fontweight="bold", transform=ax.transAxes)
+
+    down = w < 0
+    wl2 = abs(w) * L / 2.0
+    wl12 = abs(w) * L**2 / 12.0
+    h = 0.11 * L  # vertical drawing unit
+
+    def beam(ax, title, sub):
+        ax.set_xlim(-0.28 * L, 1.28 * L)
+        ax.set_ylim(-3.3 * h, 3.0 * h)
+        ax.set_aspect("equal")
+        ax.axis("off")
+        ax.set_title(title, fontsize=12, color="#1e3a8a", fontweight="bold", loc="left", pad=30)
+        ax.text(0.0, 1.02, sub, transform=ax.transAxes, fontsize=9, color="#475569", va="bottom")
+        ax.plot([0, L], [0, 0], color="#334155", lw=5, solid_capstyle="butt", zorder=3)
+        ax.plot([0, L], [0, 0], "o", color="#0f172a", ms=6, zorder=4)
+
+    def udl(ax, color=C_LOAD):
+        y0, y1 = 0.25 * h, 1.15 * h
+        ax.add_patch(Rectangle((0, y0), L, y1 - y0, color=color, alpha=0.18, lw=0))
+        for x in np.linspace(0.04 * L, 0.96 * L, 9):
+            a, b = (y1, y0) if down else (y0, y1)
+            ax.annotate("", xy=(x, b), xytext=(x, a), arrowprops=dict(arrowstyle="-|>", color=color, lw=1.4))
+        ax.text(L / 2, y1 + 0.25 * h, f"w = {w:+.1f} kN/m", ha="center", fontsize=9, color=color, fontweight="bold")
+
+    def force(ax, x, up, val, color, label_side):
+        a, b = (-1.9 * h, -0.15 * h) if up else (-0.15 * h, -1.9 * h)
+        ax.annotate("", xy=(x, b), xytext=(x, a), arrowprops=dict(arrowstyle="-|>", color=color, lw=2.6))
+        ax.text(x + label_side * 0.04 * L, -1.15 * h, f"{val:.1f} kN", color=color, fontsize=9,
+                ha="left" if label_side > 0 else "right", va="center", fontweight="bold")
+
+    def moment(ax, x, ccw, val, color, label_side):
+        r = 0.10 * L
+        yA = 0.12 * h
+        p_right, p_left = (x + r, yA), (x - r, yA)
+        A_, B_ = (p_right, p_left) if ccw else (p_left, p_right)
+        rad = 0.95 if ccw else -0.95
+        ax.add_patch(FancyArrowPatch(A_, B_, connectionstyle=f"arc3,rad={rad}", arrowstyle="-|>", mutation_scale=16, color=color, lw=2.4, zorder=5))
+        ax.text(x + label_side * 0.12 * L, 1.55 * h, f"{val:.1f} kN·m", color=color, fontsize=9,
+                ha="left" if label_side > 0 else "right", fontweight="bold")
+
+    def fixed(ax, x, side):
+        ax.add_patch(Rectangle((x - (0.05 * L if side < 0 else 0), -1.0 * h), 0.05 * L, 2.0 * h, hatch="////", fill=False, ec="#64748b", lw=1))
+
+    def roller(ax, x):
+        ax.add_patch(Polygon([[x, -0.12 * h], [x - 0.05 * L, -0.9 * h], [x + 0.05 * L, -0.9 * h]], closed=True, fc="#e2e8f0", ec="#64748b"))
+        ax.plot([x - 0.06 * L, x + 0.06 * L], [-1.05 * h, -1.05 * h], color="#64748b", lw=1.5)
+
+    # ① locked
+    ax = top[0]
+    beam(ax, "① Lock both ends", "Clamp the member: it carries the UDL alone.")
+    fixed(ax, 0, -1); fixed(ax, L, +1); udl(ax)
+    force(ax, 0.0, down, wl2, C_LOCK, +1); force(ax, L, down, wl2, C_LOCK, -1)
+    moment(ax, 0.0, down, wl12, C_LOCK, -1); moment(ax, L, not down, wl12, C_LOCK, +1)
+    ax.text(L / 2, -2.75 * h, "Fixed-end reactions: |w|L/2 and |w|L²/12", ha="center", fontsize=9, color=C_LOCK)
+
+    # ② equivalent nodal loads
+    ax = top[1]
+    beam(ax, "② Move the load to the nodes", "Reverse the reactions → nodal loads in {F}.")
+    force(ax, 0.0, not down, wl2, C_EQ, +1); force(ax, L, not down, wl2, C_EQ, -1)
+    moment(ax, 0.0, not down, wl12, C_EQ, -1); moment(ax, L, down, wl12, C_EQ, +1)
+    ax.text(L / 2, -2.75 * h, "FEF = [0, wL/2, wL²/12, 0, wL/2, −wL²/12]ᵀ\n{F} += [T]ᵀ·{FEF}", ha="center", fontsize=9, color=C_EQ, family="monospace")
+
+    # ③ solve the real structure (propped cantilever)
+    ax = top[2]
+    beam(ax, "③ Release and solve", "Real supports, nodal loads only: K·u = F.\nLoads at restrained DOFs go straight into the reactions.")
+    fixed(ax, 0, -1); roller(ax, L)
+    moment(ax, L, down, wl12, C_EQ, -1)
+    xs = np.linspace(0, L, 80); t = xs / L
+    N1, N2 = 1 - 3 * t**2 + 2 * t**3, xs * (1 - t) ** 2
+    N3, N4 = 3 * t**2 - 2 * t**3, xs * (t**2 - t)
+    v = N1 * u[1] + N2 * u[2] + N3 * u[4] + N4 * u[5]
+    vs = v / (np.max(np.abs(v)) + 1e-30) * 0.9 * h
+    ax.plot(xs, vs, "--", color=C_EL, lw=2)
+    ax.text(L / 2, -2.75 * h, f"Free DOF: theta_j = {u[5]:+.3e} rad\nf_elastic = [k]·[T]·{{u}}", ha="center", fontsize=9, color=C_EL, family="monospace")
+
+    # bottom: BMD superposition (beam convention: sagging +, drawn on the tension side)
+    xx = np.linspace(0, L, 201); tt = xx / L
+    def bmd(Mi, Mj, ww):
+        return Mi * (1 - tt) + Mj * tt - ww * xx * (L - xx) / 2.0
+    M_lock = bmd(w * L**2 / 12.0, w * L**2 / 12.0, w)
+    M_el = bmd(-f_el[2], f_el[5], 0.0)
+    M_fin = bmd(-f[2], f[5], w)
+    big = max(np.max(np.abs(M_lock)), np.max(np.abs(M_el)), np.max(np.abs(M_fin)))
+    sets = [(M_lock, C_LOCK, "Locked BMD (from FEF)", "fixed-fixed beam under UDL"),
+            (M_el, C_EL, "Elastic BMD (from k·T·u)", "joint-rotation effect, linear"),
+            (M_fin, C_FIN, "Final BMD  f = f_elastic − FEF", "what the member really carries")]
+    ends = [(w * L**2 / 12.0, w * L**2 / 12.0, w), (-f_el[2], f_el[5], 0.0), (-f[2], f[5], w)]
+    for ax, (M, col, ttl, sub), (Mi_, Mj_, w_) in zip(bot, sets, ends):
+        ax.set_facecolor("#ffffff")
+        ax.axhline(0, color="#334155", lw=3)
+        ax.fill_between(xx, 0, -M, color=col, alpha=0.22)
+        ax.plot(xx, -M, color=col, lw=2.4)
+        ax.set_ylim(-1.35 * big, 1.35 * big)
+        ax.set_xlim(-0.05 * L, 1.05 * L)
+        ax.set_title(ttl, fontsize=11.5, color=col, fontweight="bold", loc="left", pad=18)
+        ax.text(0.0, 1.01, sub, transform=ax.transAxes, fontsize=9, color="#475569", va="bottom")
+        ax.set_yticks([]); ax.set_xlabel("x (m)", fontsize=9)
+        for sp in ("top", "right", "left"):
+            ax.spines[sp].set_visible(False)
+        for k in (0, -1):
+            ax.text(xx[k], -M[k] + np.sign(-M[k] or 1) * 0.1 * big, f"{M[k]:.1f}", color=col, fontsize=9, ha="center",
+                    va="bottom" if -M[k] >= 0 else "top", fontweight="bold")
+        if abs(w_) > 1e-12:   # parabola: label its stationary point if it lies inside the span
+            xs_ = L / 2.0 - (Mj_ - Mi_) / (w_ * L)
+            if 0.02 * L < xs_ < 0.98 * L:
+                ms_ = Mi_ * (1 - xs_ / L) + Mj_ * xs_ / L - w_ * xs_ * (L - xs_) / 2.0
+                ax.plot([xs_], [-ms_], "o", color=col, ms=4)
+                ax.text(xs_, -ms_ - np.sign(ms_ or 1) * 0.1 * big, f"{ms_:.1f}", color=col, fontsize=9, ha="center",
+                        va="top" if ms_ > 0 else "bottom", fontweight="bold")
+    bot[0].text(0.0, -0.20, "BMD drawn on the tension side · M sagging +, hogging −", transform=bot[0].transAxes, fontsize=8.5, color="#64748b")
+    fig.suptitle(f"How DSM handles a UDL — propped cantilever, w = {w:+.1f} kN/m, L = {L:.1f} m", fontsize=14, color="#1e40af", fontweight="bold", y=0.985)
+    return fig, {"fef": fef, "f_el": f_el, "f": f}
+
+
+
+def show_udl_fef_explainer(key: str, w_default: float = -10.0, L_default: float = 6.0) -> None:
+    """Visual explanation of UDL fixed-end forces, with live numbers."""
+    st.markdown(
+        "A member with a UDL cannot go straight into **K·u = F**, because {F} only holds loads at the nodes. "
+        "DSM solves this in four moves, shown below for a **propped cantilever** "
+        "(fixed at i, roller at j). Change w and L to see every number update."
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        w_demo = st.number_input("w (kN/m)  — negative = downward", value=float(w_default), step=1.0, key=f"{key}_w")
+    with c2:
+        L_demo = st.number_input("L (m)", value=float(L_default), min_value=0.5, step=0.5, key=f"{key}_L")
+    if abs(w_demo) < 1e-9:
+        st.info("Enter a non-zero w to see the explanation.")
+        return
+    fig_t, d = draw_udl_fef_theory(w_demo, L_demo)
+    st.pyplot(fig_t, use_container_width=True)
+    plt.close(fig_t)
+    st.markdown(
+        """
+**In plain words**
+
+1. **Lock** — clamp both ends. The member now carries the UDL by itself. The supports push back with
+   the *fixed-end reactions*: |w|L/2 at each end and |w|L²/12 as end moments.
+2. **Move the load to the nodes** — reverse those reactions. These *equivalent nodal loads* (the FEF vector)
+   are added to {F}. Now the structure only has nodal loads, so **K·u = F** can be solved.
+3. **Release and solve** — the real supports and joints take over. The solution {u} gives the
+   *elastic* end forces **f_elastic = [k]·[T]·{u}**. These describe only the joint movements, not the UDL inside the span.
+4. **Add the locked state back** — the true member forces are **f = f_elastic − FEF**.
+   In the bottom row: locked BMD **+** elastic BMD **=** final BMD.
+
+*Forgetting step 4 is the most common student error: you would report the blue line instead of the green curve.*
+"""
+    )
+    labels = ["N'i", "V'i", "M'i", "N'j", "V'j", "M'j"]
+    st.dataframe(
+        pd.DataFrame({"local end force": labels, "f_elastic = k·T·u": np.round(d["f_el"], 3) + 0.0,
+                      "− FEF": np.round(-d["fef"], 3) + 0.0, "= f (true)": np.round(d["f"], 3) + 0.0}),
+        use_container_width=True, hide_index=True,
+    )
+    st.caption("End forces in the local frame (kN, kN·m), counter-clockwise moments positive. "
+               "Check with your textbook: for a propped cantilever, M at the fixed end = wL²/8 and the reactions are 5wL/8 and 3wL/8.")
+
+
 def draw_bmd_sfd(nodes, elements, member_results, elem_labels=None, member_loads=None):
     if member_loads is None:
         member_loads = {}
@@ -894,6 +1076,8 @@ UDL fixed-end-force contribution, and recovery equation is shown step by step.
         )
 
     with st.expander("📚 UDL Fixed-End Force Theory — click to expand", expanded=False):
+        show_udl_fef_explainer("welcome")
+        st.markdown("**Formula summary**")
         st.markdown(
             """
 <div class='formula-box'>
@@ -1129,6 +1313,9 @@ elif step == 8:
     fig_bmd = draw_bmd_sfd(nodes_parsed, elems_parsed, res["member_results"], elem_labels_p, member_loads=udl_r)
     st.pyplot(fig_bmd, use_container_width=True)
     plt.close(fig_bmd)
+    with st.expander("📚 Why do we subtract the FEF? — visual explanation", expanded=False):
+        _w8 = w_ei if abs(w_ei) > 1e-9 else -10.0
+        show_udl_fef_explainer(f"step8_{ei}", w_default=_w8, L_default=float(e["L"]))
 
 elif step == 9:
     col_v, col_t = st.columns([1.4, 1])
