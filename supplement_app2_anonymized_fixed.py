@@ -417,9 +417,12 @@ def show_matrix(M: np.ndarray, row_labels=None, col_labels=None, caption: str = 
                     styles.iloc[:, c] = "background-color:#dbeafe; color:#1e40af"
         return styles
 
-    st.dataframe(df.style.apply(styler, axis=None), use_container_width=True, height=min(35 * n + 38, 500))
+    st.dataframe(df.style.apply(styler, axis=None), width="stretch", height=min(35 * n + 38, 500))
     if caption:
         st.caption(caption)
+
+
+HL_STYLE = "background-color:#fef08a; color:#713f12; font-weight:700"
 
 
 def show_vector(v: np.ndarray, labels=None, caption: str = "", highlight=None) -> None:
@@ -434,7 +437,7 @@ def show_vector(v: np.ndarray, labels=None, caption: str = "", highlight=None) -
                     styles.iloc[h] = "background-color:#fef9c3; color:#854d0e"
         return styles
 
-    st.dataframe(df.style.apply(styler, axis=None), use_container_width=True, height=min(35 * len(v) + 38, 500))
+    st.dataframe(df.style.apply(styler, axis=None), width="stretch", height=min(35 * len(v) + 38, 500))
     if caption:
         st.caption(caption)
 
@@ -794,7 +797,7 @@ def show_udl_fef_explainer(key: str, w_default: float = -10.0, L_default: float 
         st.info("Enter a non-zero w to see the explanation.")
         return
     png, d = _udl_fef_theory_png(float(w_demo), float(L_demo))
-    st.image(png, use_container_width=True)
+    st.image(png, width="stretch")
     st.markdown(
         """
 **In plain words**
@@ -815,7 +818,7 @@ def show_udl_fef_explainer(key: str, w_default: float = -10.0, L_default: float 
     st.dataframe(
         pd.DataFrame({"local end force": labels, "f_elastic = k·T·u": np.round(d["f_el"], 3) + 0.0,
                       "− FEF": np.round(-d["fef"], 3) + 0.0, "= f (true)": np.round(d["f"], 3) + 0.0}),
-        use_container_width=True, hide_index=True,
+        width="stretch", hide_index=True,
     )
     st.caption("End forces in the local frame (kN, kN·m), counter-clockwise moments positive. "
                "Check with your textbook: for a propped cantilever, M at the fixed end = wL²/8 and the reactions are 5wL/8 and 3wL/8.")
@@ -940,10 +943,10 @@ with st.sidebar:
     st.divider()
     st.markdown("### 📐 Geometry")
     node_df = pd.DataFrame([{"Node": f"N{i + 1}", "x (m)": x, "y (m)": y} for i, (x, y) in enumerate(P["nodes"])])
-    node_df = st.data_editor(node_df, num_rows="dynamic", use_container_width=True, key=f"nodes_{chosen}")
+    node_df = st.data_editor(node_df, num_rows="dynamic", width="stretch", key=f"nodes_{chosen}")
 
     elem_df = pd.DataFrame([{"Elem": f"E{i + 1}", "Node i": ni + 1, "Node j": nj + 1, "Label": lbl} for i, ((ni, nj), lbl) in enumerate(zip(P["elements"], P["labels"]))])
-    elem_df = st.data_editor(elem_df, num_rows="dynamic", use_container_width=True, key=f"elems_{chosen}")
+    elem_df = st.data_editor(elem_df, num_rows="dynamic", width="stretch", key=f"elems_{chosen}")
 
     st.divider()
     st.markdown("### 🔩 Boundary Conditions")
@@ -970,7 +973,7 @@ with st.sidebar:
         for ld, val in ldmap.items():
             load_rows.append({"Node": nid + 1, "DOF (0=u,1=v,2=θ)": ld, "Value (kN or kN·m)": val})
     load_df = pd.DataFrame(load_rows if load_rows else [{"Node": 1, "DOF (0=u,1=v,2=θ)": 1, "Value (kN or kN·m)": 0.0}])
-    load_df = st.data_editor(load_df, num_rows="dynamic", use_container_width=True, key=f"loads_{chosen}")
+    load_df = st.data_editor(load_df, num_rows="dynamic", width="stretch", key=f"loads_{chosen}")
 
     st.divider()
     st.markdown("### 〰️ Element UDL Loads")
@@ -980,10 +983,10 @@ with st.sidebar:
     )
     udl_rows = [{"Element": f"E{ei + 1}", "w (kN/m)": w} for ei, w in P.get("udl_loads", {}).items()]
     udl_df = pd.DataFrame(udl_rows if udl_rows else [{"Element": "E1", "w (kN/m)": 0.0}])
-    udl_df = st.data_editor(udl_df, num_rows="dynamic", use_container_width=True, key=f"udl_{chosen}")
+    udl_df = st.data_editor(udl_df, num_rows="dynamic", width="stretch", key=f"udl_{chosen}")
 
     with st.container(key="run_bar"):
-        run_btn = st.button("🚀 Run DSM Analysis", type="primary", use_container_width=True)
+        run_btn = st.button("🚀 Run DSM Analysis", type="primary", width="stretch")
         run_note = st.empty()
 
 
@@ -1035,19 +1038,25 @@ _input_sig = repr((nodes_parsed, elems_parsed, sorted((k, tuple(v)) for k, v in 
                    sorted((k, tuple(sorted(v.items()))) for k, v in nodal_loads_parsed.items()),
                    sorted(udl_loads_parsed.items()), E_val, A_val, I_val))
 
+_run_failed = False
 if run_btn:
+    run_note.info("⏳ Running analysis… assembling matrices and solving.")
     if len(nodes_parsed) < 2:
         st.error("🚨 Need at least 2 nodes.")
+        run_note.error("❌ Analysis not run — see the message on the right."); _run_failed = True
     elif len(elems_parsed) < 1:
         st.error("🚨 Need at least 1 element.")
+        run_note.error("❌ Analysis not run — see the message on the right."); _run_failed = True
     elif not fixed_dofs_ui:
-        st.error("🚨 No boundary conditions defined — structure is a mechanism.")
+        st.error("🚨 No boundary conditions defined — structure is a mechanism. Tick at least one support DOF.")
+        run_note.error("❌ Analysis not run — see the message on the right."); _run_failed = True
     else:
         max_node = len(nodes_parsed) - 1
         bad = [(i, ni, nj) for i, (ni, nj) in enumerate(elems_parsed) if ni > max_node or nj > max_node or ni < 0 or nj < 0]
         if bad:
             for i, ni, nj in bad:
                 st.error(f"🚨 Element E{i + 1} references node {max(ni, nj) + 1} but only {len(nodes_parsed)} nodes exist.")
+            run_note.error("❌ Analysis not run — see the message on the right."); _run_failed = True
             st.stop()
         for ei in list(udl_loads_parsed.keys()):
             if ei >= len(elems_parsed) or ei < 0:
@@ -1057,8 +1066,16 @@ if run_btn:
             try:
                 st.session_state.result = run_dsm(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed, E_val, A_val, I_val, udl_loads=udl_loads_parsed)
                 st.session_state.result_sig = _input_sig
+                _r = st.session_state.result
+                _eq_ok = all(abs(v) < 1e-3 for v in _r["eq_check"].values())
+                st.session_state.just_ran = (
+                    f"Done: {3 * len(nodes_parsed)} DOFs, {len(_r['free_global'])} free. "
+                    + ("Equilibrium OK. " if _eq_ok else "Equilibrium FAILED (Step 9). ")
+                    + "Click Next ▶"
+                )
             except ValueError as err:
                 st.error(f"🚨 {err}")
+                run_note.error("❌ Analysis not run — see the message on the right."); _run_failed = True
                 st.stop()
         st.session_state.step = 0
         st.rerun()
@@ -1083,14 +1100,25 @@ st.divider()
 
 res = st.session_state.result
 
+_done_msg = st.session_state.pop("just_ran", None)
+if _done_msg and res is not None:
+    st.toast(_done_msg, icon="✅")
+if _run_failed:
+    pass
+elif res is None:
+    run_note.caption("👉 Check the inputs above, then click to run the analysis.")
+elif st.session_state.get("result_sig") == _input_sig:
+    run_note.caption("✅ Results are up to date with these inputs.")
+
 if res is not None and st.session_state.get("result_sig") != _input_sig:
     st.warning("✏️ Inputs have changed since the last analysis. The results below are for the **previous** inputs. "
                "Click **🚀 Run DSM Analysis** to update them.")
-    run_note.caption("⚠️ Inputs changed — click to update the results.")
+    if not _run_failed:
+        run_note.caption("⚠️ Inputs changed — click to update the results.")
 
 if res is None:
     fig_welcome = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed, elem_labels=elem_labels_p, node_labels=True, udl_loads=udl_loads_parsed)
-    st.pyplot(fig_welcome, use_container_width=True)
+    st.pyplot(fig_welcome, width="stretch")
     plt.close(fig_welcome)
     st.caption("Select a preset in the sidebar and click **🚀 Run DSM Analysis** to begin.")
 
@@ -1154,23 +1182,24 @@ STEP_NAMES = [
     "9 · Reactions",
 ]
 
+st.caption("Click any step number to jump straight to it. Results: **7** displacements · **8** member forces and BMD/SFD · **9** reactions.")
 tab_cols = st.columns(len(STEP_NAMES))
 for i, (col, name) in enumerate(zip(tab_cols, STEP_NAMES)):
     with col:
-        if st.button(name.split("·")[0].strip(), key=f"tab_{i}", use_container_width=True, type="primary" if i == st.session_state.step else "secondary"):
+        if st.button(name.split("·")[0].strip(), key=f"tab_{i}", help=name, width="stretch", type="primary" if i == st.session_state.step else "secondary"):
             st.session_state.step = i
             st.rerun()
 
 st.progress(st.session_state.step / (len(STEP_NAMES) - 1))
 nav_c1, nav_mid, nav_c2 = st.columns([1, 6, 1])
 with nav_c1:
-    if st.button("◀ Prev", use_container_width=True) and st.session_state.step > 0:
+    if st.button("◀ Prev", width="stretch") and st.session_state.step > 0:
         st.session_state.step -= 1
         st.rerun()
 with nav_mid:
     st.markdown(f"<h3 style='text-align:center;margin:0;'>{STEP_NAMES[st.session_state.step]}</h3>", unsafe_allow_html=True)
 with nav_c2:
-    if st.button("Next ▶", use_container_width=True) and st.session_state.step < len(STEP_NAMES) - 1:
+    if st.button("Next ▶", width="stretch") and st.session_state.step < len(STEP_NAMES) - 1:
         st.session_state.step += 1
         st.rerun()
 
@@ -1189,32 +1218,32 @@ if step == 0:
     col_v, col_t = st.columns([1.4, 1])
     with col_v:
         fig0 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed, elem_labels=elem_labels_p, udl_loads=udl_r)
-        st.pyplot(fig0, use_container_width=True)
+        st.pyplot(fig0, width="stretch")
         plt.close(fig0)
     with col_t:
         st.markdown("<div class='step-card'>", unsafe_allow_html=True)
         st.markdown("<span class='step-title'>Problem Setup</span>", unsafe_allow_html=True)
         st.markdown("<span class='step-subtitle'>Geometry, section, material, loads and UDL</span>", unsafe_allow_html=True)
         st.markdown("**📍 Nodes**")
-        st.dataframe(pd.DataFrame([{"ID": f"N{i + 1}", "x (m)": f"{x:.3f}", "y (m)": f"{y:.3f}"} for i, (x, y) in enumerate(nodes_parsed)]), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame([{"ID": f"N{i + 1}", "x (m)": f"{x:.3f}", "y (m)": f"{y:.3f}"} for i, (x, y) in enumerate(nodes_parsed)]), width="stretch", hide_index=True)
         st.markdown("**🔗 Elements**")
         elem_rows = []
         for i, (e, lbl) in enumerate(zip(ed, elem_labels_p)):
             elem_rows.append({"ID": f"E{i + 1}", "Label": lbl, "Ni": f"N{e['ni'] + 1}", "Nj": f"N{e['nj'] + 1}", "L(m)": f"{e['L']:.3f}", "α(°)": f"{e['alpha_deg']:.2f}", "UDL": f"w={udl_r.get(i, 0.0):+.1f} kN/m" if udl_r.get(i, 0.0) != 0.0 else "—"})
-        st.dataframe(pd.DataFrame(elem_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(elem_rows), width="stretch", hide_index=True)
         st.markdown("**⚙️ Material / Section**")
-        st.dataframe(pd.DataFrame([{"E (kN/m²)": f"{E_val:.3e}", "A (m²)": f"{A_val:.4f}", "I (m⁴)": f"{I_val:.6f}"}]), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame([{"E (kN/m²)": f"{E_val:.3e}", "A (m²)": f"{A_val:.4f}", "I (m⁴)": f"{I_val:.6f}"}]), width="stretch", hide_index=True)
         st.markdown("**➡️ Nodal Loads**")
         dof_names = {0: "Fx (kN)", 1: "Fy (kN)", 2: "M (kN·m)"}
         lrows = [{"Node": f"N{nid + 1}", "Load": dof_names[ld], "Value": f"{val:.1f}"} for nid, ldmap in nodal_loads_parsed.items() for ld, val in ldmap.items()]
-        st.dataframe(pd.DataFrame(lrows if lrows else [{"Note": "No nodal loads"}]), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(lrows if lrows else [{"Note": "No nodal loads"}]), width="stretch", hide_index=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
 elif step == 1:
     col_v, col_t = st.columns([1.4, 1])
     with col_v:
         fig1 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed, U=res["U"], dof_map=res["dof_map"], show_dofs=True, show_loads=False, udl_loads=udl_r)
-        st.pyplot(fig1, use_container_width=True)
+        st.pyplot(fig1, width="stretch")
         plt.close(fig1)
     with col_t:
         st.markdown("<div class='step-card'>", unsafe_allow_html=True)
@@ -1225,7 +1254,7 @@ elif step == 1:
             dm = res["dof_map"][i]
             tags = ["FREE" if g in res["free_global"] else "FIXED" for g in dm]
             dof_rows.append({"Node": f"N{i + 1}", "u→d": dm[0], "v→d": dm[1], "θ→d": dm[2], "u BC": tags[0], "v BC": tags[1], "θ BC": tags[2]})
-        st.dataframe(pd.DataFrame(dof_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(dof_rows), width="stretch", hide_index=True)
         st.markdown(f"- Total DOFs: **{res['nDOF']}** | Fixed: **{len(res['fixed_global'])}** → {res['fixed_global']} | Free: **{len(res['free_global'])}** → {res['free_global']}")
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1271,7 +1300,7 @@ elif step == 5:
         fef_rows = []
         for ei, fs in res["fef_summaries"].items():
             fef_rows.append({"Element": f"E{ei + 1}", "w (kN/m)": f"{fs['w']:+.3f}", "L (m)": f"{fs['L']:.3f}", "Vi=wL/2": f"{fs['Vi']:.4f}", "Mi=wL²/12": f"{fs['Mi']:.4f}", "Vj=wL/2": f"{fs['Vj']:.4f}", "Mj=-wL²/12": f"{fs['Mj']:.4f}"})
-        st.dataframe(pd.DataFrame(fef_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(fef_rows), width="stretch", hide_index=True)
     dof_lbls = [f"d{i}" for i in range(res["nDOF"])]
     col_k, col_f = st.columns([3, 1])
     with col_k:
@@ -1296,7 +1325,7 @@ elif step == 7:
     col_v, col_t = st.columns([1.4, 1])
     with col_v:
         fig7 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed, U=res["U"], dof_map=res["dof_map"], show_deformed=True, show_loads=True, udl_loads=udl_r)
-        st.pyplot(fig7, use_container_width=True)
+        st.pyplot(fig7, width="stretch")
         plt.close(fig7)
     with col_t:
         st.markdown("<div class='step-card'>", unsafe_allow_html=True)
@@ -1304,7 +1333,17 @@ elif step == 7:
         rows = []
         for gi in range(res["nDOF"]):
             rows.append({"DOF": f"d{gi}", "Node": f"N{gi // 3 + 1}", "Type": ["u", "v", "θ"][gi % 3], "Value": fmt_val(res["U"][gi], 6), "Status": "FIXED=0" if gi in res["fixed_global"] else "SOLVED"})
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        _U = np.asarray(res["U"], dtype=float)
+        _tr = [gi for gi in range(res["nDOF"]) if gi % 3 != 2]
+        _rt = [gi for gi in range(res["nDOF"]) if gi % 3 == 2]
+        _g_tr = max(_tr, key=lambda g: abs(_U[g])) if _tr else None
+        _g_rt = max(_rt, key=lambda g: abs(_U[g])) if _rt else None
+        _hl7 = {g for g in (_g_tr, _g_rt) if g is not None and abs(_U[g]) > 1e-15}
+        st.dataframe(pd.DataFrame(rows).style.apply(lambda r: [HL_STYLE if r.name in _hl7 else "" for _ in r], axis=1),
+                     width="stretch", hide_index=True)
+        if _g_tr is not None and _g_rt is not None:
+            st.markdown(f"**Key results** (highlighted): largest translation **d{_g_tr}** (N{_g_tr // 3 + 1} {['u', 'v'][_g_tr % 3]}) = "
+                        f"**{_U[_g_tr]:.4e} m**; largest rotation **d{_g_rt}** (N{_g_rt // 3 + 1} θ) = **{_U[_g_rt]:.4e} rad**.")
         st.markdown("</div>", unsafe_allow_html=True)
 
 elif step == 8:
@@ -1315,7 +1354,51 @@ elif step == 8:
     force_rows = []
     for i, (mr, e) in enumerate(zip(res["member_results"], ed)):
         force_rows.append({"Elem": f"E{i + 1}", "Label": elem_labels_p[i], "UDL": f"w={udl_r.get(i, 0.0):+.2f}" if udl_r.get(i, 0.0) != 0.0 else "—", "N_i (kN)": f"{mr['N_i']:.3f}", "V_i (kN)": f"{mr['V_i']:.3f}", "M_i (kN·m)": f"{mr['M_i']:.3f}", "N_j (kN)": f"{mr['N_j']:.3f}", "V_j (kN)": f"{mr['V_j']:.3f}", "M_j (kN·m)": f"{mr['M_j']:.3f}"})
-    st.dataframe(pd.DataFrame(force_rows), use_container_width=True, hide_index=True)
+    _cells = []   # (row, column, value) for end forces
+    for i, mr in enumerate(res["member_results"]):
+        for col_name, key in (("N_i (kN)", "N_i"), ("N_j (kN)", "N_j"), ("V_i (kN)", "V_i"), ("V_j (kN)", "V_j"), ("M_i (kN·m)", "M_i"), ("M_j (kN·m)", "M_j")):
+            _cells.append((i, col_name, key[0], float(mr[key])))
+    _hl8 = set()
+    for q in ("N", "V", "M"):
+        cand = [c for c in _cells if c[2] == q]
+        if cand:
+            best = max(cand, key=lambda c: abs(c[3]))
+            if abs(best[3]) > 1e-9:
+                _hl8.add((best[0], best[1]))
+    _df8 = pd.DataFrame(force_rows)
+    st.dataframe(_df8.style.apply(lambda r: [HL_STYLE if (r.name, c) in _hl8 else "" for c in r.index], axis=1),
+                 width="stretch", hide_index=True)
+    # moment extremes in each member, including inside UDL spans (where V = 0)
+    _ext_rows = []
+    _absmax = (None, 0.0)
+    for i, (mr, e) in enumerate(zip(res["member_results"], ed)):
+        Le = float(e["L"]); we = float(udl_r.get(i, 0.0))
+        pts = [(0.0, mr["M_i"]), (Le, mr["M_j"])]
+        if abs(we) > 1e-12:
+            xs = -mr["V_i"] / we
+            if 1e-9 < xs < Le - 1e-9:
+                pts.append((xs, mr["M_i"] * (1 - xs / Le) + mr["M_j"] * xs / Le - we * xs * (Le - xs) / 2.0))
+        pmax = max(pts, key=lambda q: q[1]); pmin = min(pts, key=lambda q: q[1])
+        vmax = max((mr["V_i"], mr["V_j"]), key=abs)
+        _ext_rows.append({
+            "Elem": f"E{i + 1}", "Label": elem_labels_p[i],
+            "Max +M (kN·m)": f"{pmax[1]:.3f}" if pmax[1] > 1e-9 else "—",
+            "at x (m)": f"{pmax[0]:.2f}" if pmax[1] > 1e-9 else "—",
+            "Max −M (kN·m)": f"{pmin[1]:.3f}" if pmin[1] < -1e-9 else "—",
+            "at x  (m)": f"{pmin[0]:.2f}" if pmin[1] < -1e-9 else "—",
+            "Max |V| (kN)": f"{abs(vmax):.3f}",
+        })
+        for x_, m_ in pts:
+            if abs(m_) > abs(_absmax[1]):
+                _absmax = ((i, x_), m_)
+    st.markdown("**Key results — bending moment extremes in each member** (x from end i; + = sagging, − = hogging, about the member's local axis)")
+    _df_ext = pd.DataFrame(_ext_rows)
+    st.dataframe(_df_ext.style.apply(lambda r: [HL_STYLE if (c in ("Max +M (kN·m)", "Max −M (kN·m)") and r[c] != "—"
+                                                and abs(float(r[c]) - _absmax[1]) < 5e-4 and r.name == _absmax[0][0]) else "" for c in r.index], axis=1),
+                 width="stretch", hide_index=True)
+    if _absmax[0] is not None:
+        st.caption(f"Highlighted: the largest bending moment in the structure, {_absmax[1]:.3f} kN·m in E{_absmax[0][0] + 1}. "
+                   "Interior values are where V = 0 inside a UDL span.")
     st.divider()
 
     element_options = [f"E{i + 1} — {lbl}" for i, lbl in enumerate(elem_labels_p)]
@@ -1342,7 +1425,7 @@ elif step == 8:
     st.info(f"✅ **E{ei + 1}** corrected end forces = f_elastic − FEF → M_i = {mr['M_i']:.3f}, V_i = {mr['V_i']:.3f}, M_j = {mr['M_j']:.3f}, V_j = {mr['V_j']:.3f} kN/kN·m")
     st.caption("BMD uses exact formula: M(x) = Mᵢ(1−x/L) + Mⱼ(x/L) − w·x(L−x)/2; SFD uses V(x) = Vᵢ + w·x. Signs: N tension +, M sagging +, V = dM/dx.")
     fig_bmd = draw_bmd_sfd(nodes_parsed, elems_parsed, res["member_results"], elem_labels_p, member_loads=udl_r)
-    st.pyplot(fig_bmd, use_container_width=True)
+    st.pyplot(fig_bmd, width="stretch")
     plt.close(fig_bmd)
     with st.expander("📚 Why do we subtract the FEF? — visual explanation", expanded=False):
         _w8 = w_ei if abs(w_ei) > 1e-9 else -10.0
@@ -1352,7 +1435,7 @@ elif step == 9:
     col_v, col_t = st.columns([1.4, 1])
     with col_v:
         fig9 = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed, U=res["U"], dof_map=res["dof_map"], show_deformed=True, show_reactions=True, reactions=res["reactions"], udl_loads=udl_r)
-        st.pyplot(fig9, use_container_width=True)
+        st.pyplot(fig9, width="stretch")
         plt.close(fig9)
     with col_t:
         st.markdown("<div class='step-card'>", unsafe_allow_html=True)
@@ -1361,7 +1444,17 @@ elif step == 9:
         dof_names_map = {0: "Rx (kN)", 1: "Ry (kN)", 2: "RM (kN·m)"}
         for gi, val in sorted(res["reactions"].items()):
             rx_rows.append({"Node": f"N{gi // 3 + 1}", "DOF": f"d{gi}", "Type": dof_names_map[gi % 3], "Reaction": f"{val:.4f}"})
-        st.dataframe(pd.DataFrame(rx_rows), use_container_width=True, hide_index=True)
+        _rx = sorted(res["reactions"].items())
+        _hl9 = set()
+        for t in (0, 1, 2):
+            cand = [(k, gi, v) for k, (gi, v) in enumerate(_rx) if gi % 3 == t]
+            if cand:
+                kbest = max(cand, key=lambda c: abs(c[2]))
+                if abs(kbest[2]) > 1e-9:
+                    _hl9.add(kbest[0])
+        st.dataframe(pd.DataFrame(rx_rows).style.apply(lambda r: [HL_STYLE if r.name in _hl9 else "" for _ in r], axis=1),
+                     width="stretch", hide_index=True)
+        st.caption("Highlighted: the largest reaction of each type (Rx, Ry, RM).")
         st.markdown("**⚖️ Global Equilibrium Check**")
         tol = 1e-3
         for label, val in res["eq_check"].items():
