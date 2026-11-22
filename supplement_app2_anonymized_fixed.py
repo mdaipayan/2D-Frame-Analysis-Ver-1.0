@@ -425,7 +425,7 @@ def show_vector(v: np.ndarray, labels=None, caption: str = "", highlight=None) -
                     styles.iloc[h] = "background-color:#fef9c3; color:#854d0e"
         return styles
 
-    st.dataframe(df.style.apply(styler, axis=None), use_container_width=True, height=min(35 * len(v) + 38, 400))
+    st.dataframe(df.style.apply(styler, axis=None), use_container_width=True, height=min(35 * len(v) + 38, 500))
     if caption:
         st.caption(caption)
 
