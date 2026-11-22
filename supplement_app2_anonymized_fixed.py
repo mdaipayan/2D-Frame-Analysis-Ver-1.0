@@ -824,6 +824,147 @@ def show_udl_fef_explainer(key: str, w_default: float = -10.0, L_default: float 
                "Check with your textbook: for a propped cantilever, M at the fixed end = wL²/8 and the reactions are 5wL/8 and 3wL/8.")
 
 
+ELEM_COLORS = ["#7c3aed", "#0891b2", "#dc2626", "#16a34a", "#d97706"]
+DOF_COLORS = ["#1d4ed8", "#15803d", "#7c3aed"]
+DOF_NAMES = ["u", "v", "θ"]
+
+
+def draw_assembly_map(res, nodes, elems, nodal_loads, elem_labels, sel):
+    """Show where element `sel` lands in global [K] and where every load lands in {F}."""
+    from matplotlib.patches import Rectangle
+    from matplotlib.lines import Line2D
+    import matplotlib.colors as mcolors
+
+    n = res["nDOF"]
+    ed = res["elem_data"]
+    fixed = set(res["fixed_global"])
+    node_of = {g: (nid, d) for nid, gd in res["dof_map"].items() for d, g in enumerate(gd)}
+
+    def ecol(i):
+        return ELEM_COLORS[i % len(ELEM_COLORS)]
+
+    def light(c, a):
+        r, g, b = mcolors.to_rgb(c)
+        return (1 - a + a * r, 1 - a + a * g, 1 - a + a * b)
+
+    # who fills each K cell
+    contrib = [[[] for _ in range(n)] for _ in range(n)]
+    for i, e in enumerate(ed):
+        for gr in e["gdofs"]:
+            for gc in e["gdofs"]:
+                contrib[gr][gc].append(i)
+    # where each F entry comes from
+    f_src = [[] for _ in range(n)]
+    for nid, ldmap in nodal_loads.items():
+        for ld, val in ldmap.items():
+            if abs(val) > 1e-12:
+                f_src[res["dof_map"][nid][ld]].append("P")
+    for i, summ in res.get("fef_summaries", {}).items():
+        for r, g in enumerate(ed[i]["gdofs"]):
+            if abs(summ["fef_global"][r]) > 1e-9:
+                f_src[g].append(i)
+
+    fig = plt.figure(figsize=(15, 7.2), facecolor="white")
+    gs = fig.add_gridspec(1, 3, width_ratios=[1.05, 1.55, 0.30], wspace=0.12, left=0.02, right=0.99, top=0.80, bottom=0.17)
+    sub = gs[0, 0].subgridspec(2, 1, height_ratios=[2.2, 1], hspace=0.05)
+    axF = fig.add_subplot(sub[0, 0]); axI = fig.add_subplot(sub[1, 0]); axI.axis("off")
+    axK = fig.add_subplot(gs[0, 1]); axV = fig.add_subplot(gs[0, 2])
+
+    # ---- panel 1: frame with the selected element and its DOF numbers
+    xs = [p[0] for p in nodes]; ys = [p[1] for p in nodes]
+    span = max(max(xs) - min(xs), max(ys) - min(ys), 1.0)
+    for i, (a, b) in enumerate(elems):
+        (x1, y1), (x2, y2) = nodes[a], nodes[b]
+        on = i == sel
+        axF.plot([x1, x2], [y1, y2], color=ecol(i), lw=5 if on else 2, alpha=1 if on else 0.35, solid_capstyle="round", zorder=3 if on else 2)
+        axF.text((x1 + x2) / 2, (y1 + y2) / 2, f" E{i + 1}", color=ecol(i), fontsize=10 if on else 8, fontweight="bold" if on else "normal",
+                 ha="left", va="bottom", alpha=1 if on else 0.6)
+    for nid, (x, y) in enumerate(nodes):
+        axF.plot(x, y, "o", color="#0f172a", ms=6, zorder=4)
+        axF.text(x, y - 0.06 * span, f"N{nid + 1}", ha="center", va="top", fontsize=8, color="#334155")
+    a, b = elems[sel]
+    (xa, ya), (xb, yb) = nodes[a], nodes[b]
+    for tag, (x, y) in (("i", (xa, ya)), ("j", (xb, yb))):
+        axF.annotate(tag, xy=(x, y), xytext=(9, 7), textcoords="offset points", ha="left", va="bottom",
+                     fontsize=11, fontweight="bold", color=ecol(sel), zorder=7,
+                     bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.9))
+    axF.axis("off")
+    pad = 0.18 * span
+    axF.set_xlim(min(xs) - pad, max(xs) + pad)
+    axF.set_ylim(min(ys) - pad, max(ys) + pad)
+    axF.set_aspect("equal", adjustable="box")
+    for k, (tag, nid) in enumerate((("i", a), ("j", b))):
+        gd = res["dof_map"][nid]
+        lines = [f"end {tag} = N{nid + 1}"] + [f"{DOF_NAMES[d]}{'ᵢ' if tag == 'i' else 'ⱼ'} → d{gd[d]}" + ("  (fixed)" if gd[d] in fixed else "") for d in range(3)]
+        axI.text(0.02 + 0.5 * k, 0.92, "\n".join(lines), transform=axI.transAxes, ha="left", va="top", fontsize=9, family="monospace",
+                 color="#0f172a", linespacing=1.5, bbox=dict(boxstyle="round,pad=0.5", fc=light(ecol(sel), 0.15), ec=ecol(sel)))
+    axF.set_title(f"① E{sel + 1} ({elem_labels[sel]}): its ends and global DOF numbers", fontsize=10.5, color="#1e3a8a", loc="left", fontweight="bold", pad=12)
+
+    # ---- panel 2: global [K] block map
+    for r in range(n):
+        for c in range(n):
+            who = contrib[r][c]
+            if not who:
+                fc = "white"
+            elif len(who) == 1:
+                fc = light(ecol(who[0]), 0.45)
+            else:
+                fc = "#cbd5e1"
+            axK.add_patch(Rectangle((c, r), 1, 1, fc=fc, ec="#e2e8f0", lw=0.5))
+    sg = ed[sel]["gdofs"]
+    for gr in sg:
+        for gc in sg:
+            axK.add_patch(Rectangle((gc, gr), 1, 1, fill=False, ec="#0f172a", lw=1.8, zorder=5))
+    for k in range(0, n + 1, 3):
+        axK.axhline(k, color="#475569", lw=1.2); axK.axvline(k, color="#475569", lw=1.2)
+    labels = [f"d{g} {DOF_NAMES[node_of[g][1]]}{node_of[g][0] + 1}" for g in range(n)]
+    axK.set_xticks([g + 0.5 for g in range(n)]); axK.set_yticks([g + 0.5 for g in range(n)])
+    axK.set_xticklabels(labels, rotation=90, fontsize=7, family="monospace")
+    axK.set_yticklabels(labels, fontsize=7, family="monospace")
+    for t, g in zip(axK.get_xticklabels(), range(n)):
+        t.set_color("#94a3b8" if g in fixed else DOF_COLORS[g % 3])
+    for t, g in zip(axK.get_yticklabels(), range(n)):
+        t.set_color("#94a3b8" if g in fixed else DOF_COLORS[g % 3])
+    for nid in range(len(nodes)):
+        axK.text(3 * nid + 1.5, -0.4, f"N{nid + 1}", ha="center", va="bottom", fontsize=8, fontweight="bold", color="#334155")
+    axK.set_xlim(0, n); axK.set_ylim(n, 0); axK.set_aspect("equal")
+    axK.tick_params(length=0)
+    axK.set_title(f"② Global [K]: outlined cells receive [K]ₑ of E{sel + 1}", fontsize=10.5, color="#1e3a8a", loc="left", fontweight="bold", pad=34)
+
+    # ---- panel 3: load vector {F}
+    F = res["F"]
+    for g in range(n):
+        src = f_src[g]
+        if not src:
+            fc = "white"
+        elif len(set(src)) > 1:
+            fc = "#cbd5e1"
+        elif src[0] == "P":
+            fc = "#fde68a"
+        else:
+            fc = light(ecol(src[0]), 0.45)
+        axV.add_patch(Rectangle((0, g), 1, 1, fc=fc, ec="#e2e8f0", lw=0.5))
+        if abs(F[g]) > 1e-9:
+            axV.text(0.5, g + 0.5, f"{F[g]:.1f}", ha="center", va="center", fontsize=7, family="monospace")
+        if sel in src:
+            axV.add_patch(Rectangle((0, g), 1, 1, fill=False, ec="#0f172a", lw=1.8, zorder=5))
+    for k in range(0, n + 1, 3):
+        axV.axhline(k, color="#475569", lw=1.2)
+    axV.set_xlim(0, 1); axV.set_ylim(n, 0); axV.set_xticks([]); axV.set_yticks([])
+    axV.set_title("③ {F}", fontsize=10.5, color="#1e3a8a", loc="left", fontweight="bold", pad=34)
+
+    # ---- legend
+    handles = [Rectangle((0, 0), 1, 1, fc=light(ecol(i), 0.45), ec="none", label=f"E{i + 1} only") for i in range(len(ed))]
+    handles += [Rectangle((0, 0), 1, 1, fc="#cbd5e1", ec="none", label="shared by 2+ elements (joint)"),
+                Rectangle((0, 0), 1, 1, fc="#fde68a", ec="none", label="{F}: nodal point load"),
+                Rectangle((0, 0), 1, 1, fill=False, ec="#0f172a", lw=1.8, label=f"cells from E{sel + 1}"),
+                Line2D([], [], color="#94a3b8", lw=0, marker="s", label="grey label = fixed DOF")]
+    fig.legend(handles=handles, loc="lower center", ncol=min(len(handles), 6), fontsize=8.5, frameon=False, bbox_to_anchor=(0.5, 0.0))
+    fig.suptitle(f"Where [K]ₑ of E{sel + 1} goes: its end DOFs in global directions (uᵢ vᵢ θᵢ uⱼ vⱼ θⱼ) → rows and columns {', '.join('d' + str(g) for g in sg)} of [K]",
+                 fontsize=12.5, color="#1e40af", fontweight="bold", y=0.985)
+    return fig
+
+
 def draw_bmd_sfd(nodes, elements, member_results, elem_labels=None, member_loads=None):
     if member_loads is None:
         member_loads = {}
@@ -1289,6 +1430,19 @@ elif step == 4:
     e = ed[ei]
     dof_lbls = [f"d{g}" for g in e["gdofs"]]
     show_matrix(e["k_glob"], row_labels=dof_lbls, col_labels=dof_lbls, caption=f"[K]ₑ for E{ei + 1} mapped to global DOFs {e['gdofs']}")
+    st.markdown(f"#### 🧩 Assembly map: where E{ei + 1} goes in [K] and where the loads go in {{F}}")
+    fig_map = draw_assembly_map(res, nodes_parsed, elems_parsed, nodal_loads_parsed, elem_labels_p, ei)
+    st.pyplot(fig_map, width="stretch")
+    plt.close(fig_map)
+    st.markdown(
+        "**How to read it.** Every row and column of [K] belongs to one node and one direction "
+        "(for example **d4 v2** = vertical DOF of node N2). The thick lines split [K] into 3×3 node blocks. "
+        f"The outlined cells are where the 36 numbers of [K]ₑ for E{ei + 1} are added. "
+        "Grey cells receive numbers from two or more elements: these are the joints, where stiffness adds up. "
+        "In {F}, yellow entries come from point loads at nodes, and coloured entries come from the UDL "
+        "equivalent nodal loads of the element with that colour (see Step 5). Grey labels mark fixed DOFs, "
+        "which are removed in Step 6."
+    )
 
 elif step == 5:
     st.markdown("<div class='step-card'>", unsafe_allow_html=True)
