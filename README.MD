@@ -14,7 +14,7 @@ A glass-box teaching app for the **direct stiffness method** for 2D frames. Stud
 | 1 | DOF Numbering | Global degree-of-freedom numbers; free and fixed DOFs |
 | 2 | Local [k] | 6×6 element stiffness matrix in local axes |
 | 3 | Transform [T] | Transformation matrix, element angle α, cos α and sin α |
-| 4 | Global [K]ₑ | Element stiffness in global axes, [T]ᵀ[k][T] |
+| 4 | Global [K]ₑ | Element stiffness in global axes, [T]ᵀ[k][T], and an assembly map showing which rows and columns of [K] each element fills and where each load lands in {F} |
 | 5 | Assembly [K] | Global stiffness matrix (12×12 for the portal frame) and load vector {F}, with the UDL fixed-end forces |
 | 6 | Partition & BCs | Reduced system [K_ff]{U_f} = {F_f} |
 | 7 | Solve {U} | Nodal displacements and the condition number of [K_ff] |
