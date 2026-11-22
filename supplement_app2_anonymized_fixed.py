@@ -48,6 +48,15 @@ st.markdown(
   }
   .step-title { font-size:18px; font-weight:700; color:#1e40af; font-family:'Courier New',monospace; }
   .step-subtitle { font-size:13px; color:#475569; margin-bottom:8px; }
+/* Run button stays visible at the bottom of the sidebar */
+[data-testid="stLayoutWrapper"]:has(> .st-key-run_bar),
+.st-key-run_bar {
+  position: sticky; bottom: 0; z-index: 999;
+  background: var(--secondary-background-color, #f0f2f6);
+  padding: 0.6rem 0 0.8rem 0; margin-top: 0.4rem;
+  border-top: 1px solid rgba(49, 51, 63, 0.2);
+  box-shadow: 0 -6px 10px -6px rgba(0, 0, 0, 0.15);
+}
 </style>
 """,
     unsafe_allow_html=True,
@@ -758,6 +767,17 @@ def draw_udl_fef_theory(w: float, L: float, E: float = 200e6, A: float = 0.01, I
 
 
 
+@st.cache_data(show_spinner=False, max_entries=64)
+def _udl_fef_theory_png(w: float, L: float):
+    """Draw the explainer once per (w, L) and reuse it on later reruns."""
+    import io
+    fig_t, d = draw_udl_fef_theory(w, L)
+    buf = io.BytesIO()
+    fig_t.savefig(buf, format="png", dpi=110, facecolor=fig_t.get_facecolor(), bbox_inches="tight")
+    plt.close(fig_t)
+    return buf.getvalue(), d
+
+
 def show_udl_fef_explainer(key: str, w_default: float = -10.0, L_default: float = 6.0) -> None:
     """Visual explanation of UDL fixed-end forces, with live numbers."""
     st.markdown(
@@ -773,9 +793,8 @@ def show_udl_fef_explainer(key: str, w_default: float = -10.0, L_default: float 
     if abs(w_demo) < 1e-9:
         st.info("Enter a non-zero w to see the explanation.")
         return
-    fig_t, d = draw_udl_fef_theory(w_demo, L_demo)
-    st.pyplot(fig_t, use_container_width=True)
-    plt.close(fig_t)
+    png, d = _udl_fef_theory_png(float(w_demo), float(L_demo))
+    st.image(png, use_container_width=True)
     st.markdown(
         """
 **In plain words**
@@ -963,8 +982,9 @@ with st.sidebar:
     udl_df = pd.DataFrame(udl_rows if udl_rows else [{"Element": "E1", "w (kN/m)": 0.0}])
     udl_df = st.data_editor(udl_df, num_rows="dynamic", use_container_width=True, key=f"udl_{chosen}")
 
-    st.divider()
-    run_btn = st.button("🚀 Run DSM Analysis", type="primary", use_container_width=True)
+    with st.container(key="run_bar"):
+        run_btn = st.button("🚀 Run DSM Analysis", type="primary", use_container_width=True)
+        run_note = st.empty()
 
 
 def _is_valid_row(r: pd.Series, keys: List[str]) -> bool:
@@ -1011,6 +1031,10 @@ for _, r in udl_df.iterrows():
     except (ValueError, TypeError):
         st.warning("Invalid UDL row ignored.")
 
+_input_sig = repr((nodes_parsed, elems_parsed, sorted((k, tuple(v)) for k, v in fixed_dofs_ui.items()),
+                   sorted((k, tuple(sorted(v.items()))) for k, v in nodal_loads_parsed.items()),
+                   sorted(udl_loads_parsed.items()), E_val, A_val, I_val))
+
 if run_btn:
     if len(nodes_parsed) < 2:
         st.error("🚨 Need at least 2 nodes.")
@@ -1032,6 +1056,7 @@ if run_btn:
         with st.spinner("Assembling stiffness matrices, including UDL Fixed-End Forces…"):
             try:
                 st.session_state.result = run_dsm(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed, E_val, A_val, I_val, udl_loads=udl_loads_parsed)
+                st.session_state.result_sig = _input_sig
             except ValueError as err:
                 st.error(f"🚨 {err}")
                 st.stop()
@@ -1057,6 +1082,11 @@ st.markdown(
 st.divider()
 
 res = st.session_state.result
+
+if res is not None and st.session_state.get("result_sig") != _input_sig:
+    st.warning("✏️ Inputs have changed since the last analysis. The results below are for the **previous** inputs. "
+               "Click **🚀 Run DSM Analysis** to update them.")
+    run_note.caption("⚠️ Inputs changed — click to update the results.")
 
 if res is None:
     fig_welcome = draw_frame(nodes_parsed, elems_parsed, fixed_dofs_ui, nodal_loads_parsed, elem_labels=elem_labels_p, node_labels=True, udl_loads=udl_loads_parsed)
