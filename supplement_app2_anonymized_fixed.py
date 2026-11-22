@@ -1362,7 +1362,6 @@ if step == 0:
         st.pyplot(fig0, width="stretch")
         plt.close(fig0)
     with col_t:
-        st.markdown("<div class='step-card'>", unsafe_allow_html=True)
         st.markdown("<span class='step-title'>Problem Setup</span>", unsafe_allow_html=True)
         st.markdown("<span class='step-subtitle'>Geometry, section, material, loads and UDL</span>", unsafe_allow_html=True)
         st.markdown("**📍 Nodes**")
@@ -1378,7 +1377,6 @@ if step == 0:
         dof_names = {0: "Fx (kN)", 1: "Fy (kN)", 2: "M (kN·m)"}
         lrows = [{"Node": f"N{nid + 1}", "Load": dof_names[ld], "Value": f"{val:.1f}"} for nid, ldmap in nodal_loads_parsed.items() for ld, val in ldmap.items()]
         st.dataframe(pd.DataFrame(lrows if lrows else [{"Note": "No nodal loads"}]), width="stretch", hide_index=True)
-        st.markdown("</div>", unsafe_allow_html=True)
 
 elif step == 1:
     col_v, col_t = st.columns([1.4, 1])
@@ -1387,7 +1385,6 @@ elif step == 1:
         st.pyplot(fig1, width="stretch")
         plt.close(fig1)
     with col_t:
-        st.markdown("<div class='step-card'>", unsafe_allow_html=True)
         st.markdown("<span class='step-title'>Step 1 — DOF Numbering</span>", unsafe_allow_html=True)
         st.markdown("<span class='step-subtitle'>Each node gets 3 global DOFs: u, v, θ</span>", unsafe_allow_html=True)
         dof_rows = []
@@ -1397,13 +1394,10 @@ elif step == 1:
             dof_rows.append({"Node": f"N{i + 1}", "u→d": dm[0], "v→d": dm[1], "θ→d": dm[2], "u BC": tags[0], "v BC": tags[1], "θ BC": tags[2]})
         st.dataframe(pd.DataFrame(dof_rows), width="stretch", hide_index=True)
         st.markdown(f"- Total DOFs: **{res['nDOF']}** | Fixed: **{len(res['fixed_global'])}** → {res['fixed_global']} | Free: **{len(res['free_global'])}** → {res['free_global']}")
-        st.markdown("</div>", unsafe_allow_html=True)
 
 elif step == 2:
-    st.markdown("<div class='step-card'>", unsafe_allow_html=True)
     st.markdown("<span class='step-title'>Step 2 — Local Stiffness Matrix [k] (6×6)</span>", unsafe_allow_html=True)
     st.markdown("<span class='step-subtitle'>Euler–Bernoulli beam-column element in local axes</span>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
     elem_sel = st.selectbox("Select Element:", [f"E{i + 1} — {lbl}" for i, lbl in enumerate(elem_labels_p)])
     ei = int(elem_sel.split("E")[1].split(" ")[0]) - 1
     e = ed[ei]
@@ -1411,9 +1405,7 @@ elif step == 2:
     show_matrix(e["k_loc"], row_labels=dof_lbls, col_labels=dof_lbls, caption=f"[k] for E{ei + 1}")
 
 elif step == 3:
-    st.markdown("<div class='step-card'>", unsafe_allow_html=True)
     st.markdown("<span class='step-title'>Step 3 — Transformation Matrix [T]</span>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
     elem_sel = st.selectbox("Select Element:", [f"E{i + 1} — {lbl}" for i, lbl in enumerate(elem_labels_p)])
     ei = int(elem_sel.split("E")[1].split(" ")[0]) - 1
     e = ed[ei]
@@ -1422,9 +1414,7 @@ elif step == 3:
     show_matrix(e["T6"], row_labels=dof_lbls, col_labels=dof_lbls, caption="[T] — 6×6")
 
 elif step == 4:
-    st.markdown("<div class='step-card'>", unsafe_allow_html=True)
     st.markdown("<span class='step-title'>Step 4 — Global Element Stiffness [K]ₑ = [T]ᵀ[k][T]</span>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
     elem_sel = st.selectbox("Select Element:", [f"E{i + 1} — {lbl}" for i, lbl in enumerate(elem_labels_p)])
     ei = int(elem_sel.split("E")[1].split(" ")[0]) - 1
     e = ed[ei]
@@ -1445,10 +1435,8 @@ elif step == 4:
     )
 
 elif step == 5:
-    st.markdown("<div class='step-card'>", unsafe_allow_html=True)
     st.markdown("<span class='step-title'>Step 5 — Global Assembly [K] and {F}</span>", unsafe_allow_html=True)
     st.markdown("<span class='step-subtitle'>Element matrices plus UDL FEF contributions are scattered into the global system.</span>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
     if res.get("fef_summaries"):
         st.markdown("#### 〰️ UDL Fixed-End Force Details")
         fef_rows = []
@@ -1463,9 +1451,7 @@ elif step == 5:
         show_vector(res["F"], labels=dof_lbls, caption="{F} — point loads + UDL equivalent loads", highlight=[i for i, v in enumerate(res["F"]) if abs(v) > 1e-10])
 
 elif step == 6:
-    st.markdown("<div class='step-card'>", unsafe_allow_html=True)
     st.markdown("<span class='step-title'>Step 6 — Partition and Apply Boundary Conditions</span>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
     ff = res["free_global"]
     dof_lbls_f = [f"d{g}" for g in ff]
     col_kff, col_ff = st.columns([3, 1])
@@ -1482,7 +1468,6 @@ elif step == 7:
         st.pyplot(fig7, width="stretch")
         plt.close(fig7)
     with col_t:
-        st.markdown("<div class='step-card'>", unsafe_allow_html=True)
         st.markdown("<span class='step-title'>Step 7 — Solve {Uf} = [Kff]⁻¹{Ff}</span>", unsafe_allow_html=True)
         rows = []
         for gi in range(res["nDOF"]):
@@ -1498,13 +1483,10 @@ elif step == 7:
         if _g_tr is not None and _g_rt is not None:
             st.markdown(f"**Key results** (highlighted): largest translation **d{_g_tr}** (N{_g_tr // 3 + 1} {['u', 'v'][_g_tr % 3]}) = "
                         f"**{_U[_g_tr]:.4e} m**; largest rotation **d{_g_rt}** (N{_g_rt // 3 + 1} θ) = **{_U[_g_rt]:.4e} rad**.")
-        st.markdown("</div>", unsafe_allow_html=True)
 
 elif step == 8:
-    st.markdown("<div class='step-card'>", unsafe_allow_html=True)
     st.markdown("<span class='step-title'>Step 8 — Member End Forces {f'} = [k][T]{u} − {FEF}</span>", unsafe_allow_html=True)
     st.markdown("<span class='step-subtitle'>FEF is subtracted to obtain true member forces when UDL is present.</span>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
     force_rows = []
     for i, (mr, e) in enumerate(zip(res["member_results"], ed)):
         force_rows.append({"Elem": f"E{i + 1}", "Label": elem_labels_p[i], "UDL": f"w={udl_r.get(i, 0.0):+.2f}" if udl_r.get(i, 0.0) != 0.0 else "—", "N_i (kN)": f"{mr['N_i']:.3f}", "V_i (kN)": f"{mr['V_i']:.3f}", "M_i (kN·m)": f"{mr['M_i']:.3f}", "N_j (kN)": f"{mr['N_j']:.3f}", "V_j (kN)": f"{mr['V_j']:.3f}", "M_j (kN·m)": f"{mr['M_j']:.3f}"})
@@ -1592,7 +1574,6 @@ elif step == 9:
         st.pyplot(fig9, width="stretch")
         plt.close(fig9)
     with col_t:
-        st.markdown("<div class='step-card'>", unsafe_allow_html=True)
         st.markdown("<span class='step-title'>Step 9 — Support Reactions and Equilibrium</span>", unsafe_allow_html=True)
         rx_rows = []
         dof_names_map = {0: "Rx (kN)", 1: "Ry (kN)", 2: "RM (kN·m)"}
@@ -1613,7 +1594,6 @@ elif step == 9:
         tol = 1e-3
         for label, val in res["eq_check"].items():
             st.markdown(f"{'✅' if abs(val) < tol else '❌'} **{label}** = {val:.6f}")
-        st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
